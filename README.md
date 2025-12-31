@@ -20,6 +20,14 @@ This project consists of:
 
 ## Hardware Requirements
 
+### Recommended Boards
+
+**Transmitter:**
+- [FireBeetle 2 ESP32-E](https://www.dfrobot.com/product-2195.html) - Optimized for low power consumption, ideal for battery-powered pedal transmitters
+
+**Receiver:**
+- [ESP32-S3-DevKitC-1-N16R8](https://www.amazon.com/dp/B0CC8NYXRG) - ESP32-S3 board with native USB support for HID Keyboard functionality
+
 ### Transmitter
 - ESP32 (tested with FireBeetle 2 ESP32-E)
 - Pedal switches (normally-open, connected to GPIO with pull-up)
