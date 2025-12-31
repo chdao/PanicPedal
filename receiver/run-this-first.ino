@@ -19,6 +19,7 @@ void setup() {
   
   // Initialize WiFi to get MAC address
   WiFi.mode(WIFI_STA);
+  delay(100); // Give WiFi time to initialize before reading MAC address
   
   // Get and display MAC address
   String macAddress = WiFi.macAddress();
