@@ -45,21 +45,14 @@ This project consists of:
 
 ### 1. Get Receiver MAC Address
 
-**Option A: Use the helper sketch (Recommended)**
+**⚠️ Important**: You must use `receiver/run-this-first.ino` to get the MAC address. The main receiver sketch (`receiver/receiver.ino`) initializes USB HID Keyboard which disables Serial output, so you won't be able to see the MAC address.
+
 1. Upload `receiver/run-this-first.ino` to your ESP32-S2/S3
 2. Open Serial Monitor at 115200 baud
 3. The sketch will display the MAC address in both formats:
    - Human-readable: `a0:85:e3:e0:8e:a8`
    - Code format ready to copy: `{0xa0, 0x85, 0xe3, 0xe0, 0x8e, 0xa8}`
 4. Copy the code format and use it in the transmitter configuration
-
-**Option B: Use the main receiver sketch**
-1. Upload `receiver/receiver.ino` to your ESP32-S2/S3
-2. Open Serial Monitor at 115200 baud
-3. Note the MAC address displayed (e.g., `a0:85:e3:e0:8e:a8`)
-4. Convert it to hex format for the transmitter (see conversion guide below)
-
-**⚠️ Important**: You need this MAC address for the transmitter configuration!
 
 ### 2. Configure Transmitter
 
