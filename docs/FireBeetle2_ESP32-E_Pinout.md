@@ -49,6 +49,7 @@ This document describes the pinout for the FireBeetle 2 ESP32-E development boar
 
 ### Analog Input Pins
 - **GPIO 0** (D5): ADC2_CH1, TOUCH1, RTC_GPIO11
+  - **⚠️ IMPORTANT**: Must be grounded (connected to GND) to enter download/boot mode for uploading sketches
 - **GPIO 2** (D9): ADC2_CH2, TOUCH2, RTC_GPIO12 (LED pin)
 - **GPIO 4** (D12): ADC1_CH0, TOUCH0, RTC_GPIO10
 - **GPIO 12** (D13): ADC2_CH5, TOUCH5, RTC_GPIO15

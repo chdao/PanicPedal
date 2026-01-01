@@ -96,6 +96,20 @@ LED (cathode)          ───> GND
 
 ## Setup Instructions
 
+### 0. Uploading Code to FireBeetle 2 ESP32-E
+
+**⚠️ IMPORTANT**: To upload sketches to the FireBeetle 2 ESP32-E, you must ground GPIO 0 (D5) during upload:
+
+1. Connect GPIO 0 (D5) to GND using a jumper wire or button
+2. Press and hold the RESET button
+3. While holding RESET, release GPIO 0 from GND (if using a button, release the button)
+4. Release RESET button
+5. The board should now be in download mode
+6. Upload your sketch from Arduino IDE
+7. After upload completes, disconnect GPIO 0 from GND
+
+**Alternative method**: Some FireBeetle boards have a BOOT button that does this automatically. If your board has a BOOT button, hold BOOT while pressing RESET, then release RESET first, then release BOOT.
+
 ### 1. Get Receiver MAC Address
 
 **⚠️ Important**: You must use `receiver/run-this-first.ino` to get the MAC address. The main receiver sketch (`receiver/receiver.ino`) initializes USB HID Keyboard which disables Serial output, so you won't be able to see the MAC address.
