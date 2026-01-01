@@ -85,11 +85,13 @@ This document describes the pinout for the FireBeetle 2 ESP32-E development boar
 
 1. **VCC vs 3.3V**: Always connect battery/TP4056 OUT+ to **VCC**, never to 3.3V. The 3.3V pin is an output, not an input.
 
-2. **Deep Sleep Wakeup**: GPIO 13 and GPIO 14 support deep sleep wakeup, which is why they're used for the pedals.
+2. **Download Mode (GPIO 0)**: To upload sketches to the FireBeetle, GPIO 0 (D5) must be grounded (connected to GND) during the upload process. See the main README for detailed instructions.
 
-3. **Input-Only Pins**: GPIO 34, 35, 36, and 39 are input-only (no internal pull-up/pull-down resistors).
+3. **Deep Sleep Wakeup**: GPIO 13 and GPIO 14 support deep sleep wakeup, which is why they're used for the pedals.
 
-4. **RTC Pins**: Pins marked as RTC can retain their state during deep sleep, which is useful for wakeup functionality.
+4. **Input-Only Pins**: GPIO 34, 35, 36, and 39 are input-only (no internal pull-up/pull-down resistors).
+
+5. **RTC Pins**: Pins marked as RTC can retain their state during deep sleep, which is useful for wakeup functionality.
 
 ## Reference
 
