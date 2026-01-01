@@ -4,6 +4,8 @@ A wireless pedal system using ESP-NOW for low-latency communication between peda
 
 **Original Design**: This project is based on the [Perfectly Adequate Arcade Pedal (Wireless)](https://www.printables.com/model/1220746-perfectly-adequate-arcade-pedal-wireless) design on Printables. All initial ideas and the pedal model come from that design.
 
+**⚠️ IMPORTANT CORRECTION**: The original schematic shows TP4056 OUT+ connected to the 3V3 pin. This is **INCORRECT** and can damage the ESP32. The TP4056 OUT+ must connect to **VCC** instead. See the [Wiring Diagram](#wiring-diagram) section below for the correct connections.
+
 ## Overview
 
 This project consists of:
@@ -50,6 +52,46 @@ This project consists of:
 
 ### Receiver
 - Uses USB for communication (no GPIO pins needed for functionality)
+
+## Wiring Diagram
+
+### Transmitter Power Wiring (FireBeetle 2 ESP32-E)
+
+**⚠️ IMPORTANT**: The TP4056 charging board OUT+ must connect to **VCC**, NOT 3V3!
+
+```
+TP4056 Charging Board          FireBeetle 2 ESP32-E
+─────────────────────          ─────────────────────
+OUT+ (red wire)    ──────────> VCC (or PH2.0 battery connector)
+OUT- (black wire)  ──────────> GND
+B+                 ──────────> 18650 Battery +
+B-                 ──────────> 18650 Battery -
+IN+                ──────────> Power Switch
+IN-                ──────────> GND
+```
+
+**Why VCC and not 3V3?**
+- **VCC** is the input voltage pin that accepts battery voltage (3.7-4.2V) or USB voltage (~4.7V)
+- **3V3** is a regulated 3.3V OUTPUT pin - connecting 4-5V to it can damage the ESP32
+- The FireBeetle's onboard regulator converts VCC to 3.3V internally
+
+### Transmitter Signal Wiring
+
+```
+Left Pedal Switch (NO)  ───> GPIO 13
+Left Pedal Switch (COM) ───> GND
+
+Right Pedal Switch (NO)  ───> GPIO 14 (dual mode only)
+Right Pedal Switch (COM) ───> GND
+
+Mode Select Switch      ───> GPIO 26 (optional)
+Mode Select Switch      ───> GND
+
+LED (anode)            ───> GPIO 2 (optional)
+LED (cathode)          ───> GND
+```
+
+**Note**: Switches should be normally-open (NO) type. The ESP32's internal pull-up resistors keep the pins HIGH when switches are open, and LOW when pressed.
 
 ## Setup Instructions
 
