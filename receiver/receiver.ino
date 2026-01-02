@@ -49,6 +49,13 @@ bool gracePeriodCheckDone = false;  // Flag to ensure grace period check runs on
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 bool keysPressed[256];
 
+// Transmitter replacement mechanism
+uint8_t pendingNewTransmitterMAC[6] = {0};
+bool waitingForAliveResponses = false;
+unsigned long aliveResponseTimeout = 0;
+bool transmitterResponded[2] = {false, false};
+#define ALIVE_RESPONSE_TIMEOUT 2000  // 2 seconds to wait for responses
+
 // Debug monitor
 uint8_t debugMonitorMAC[6] = {0};
 bool debugMonitorPaired = false;
@@ -434,7 +441,28 @@ void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incoming
           transmitterLastSeen[transmitterIndex] = millis();
         }
       } else {
-        debugPrint("Received MSG_TRANSMITTER_ONLINE from unknown transmitter - ignoring");
+        // Unknown transmitter - if receiver is full, try to replace unresponsive transmitters
+        if (pedalSlotsUsed >= MAX_PEDAL_SLOTS) {
+          debugPrint("Received MSG_TRANSMITTER_ONLINE from unknown transmitter - receiver full, checking for unresponsive transmitters");
+          
+          // Store the new transmitter MAC for potential pairing
+          memcpy(pendingNewTransmitterMAC, txMAC, 6);
+          
+          // Send MSG_ALIVE to all currently paired transmitters to check if they're responsive
+          struct_message ping = {MSG_ALIVE, 0, false, 0};
+          for (int i = 0; i < pairedCount; i++) {
+            transmitterResponded[i] = false;  // Reset response flags
+            esp_now_send(pairedTransmitters[i], (uint8_t*)&ping, sizeof(ping));
+          }
+          
+          // Set timeout for waiting for responses
+          waitingForAliveResponses = true;
+          aliveResponseTimeout = millis() + ALIVE_RESPONSE_TIMEOUT;
+          
+          debugPrint("Sent MSG_ALIVE to %d paired transmitter(s), waiting %dms for responses", pairedCount, ALIVE_RESPONSE_TIMEOUT);
+        } else {
+          debugPrint("Received MSG_TRANSMITTER_ONLINE from unknown transmitter - receiver has free slots, waiting for discovery request");
+        }
       }
       return;
     }
@@ -624,6 +652,13 @@ void OnDataRecv(const esp_now_recv_info_t *esp_now_info, const uint8_t *incoming
       if (transmitterIndex >= 0) {
         // Update last seen time for known transmitters
         transmitterLastSeen[transmitterIndex] = millis();
+        
+        // If we're waiting for responses to replace unresponsive transmitters, mark this one as responded
+        if (waitingForAliveResponses) {
+          transmitterResponded[transmitterIndex] = true;
+          debugPrint("  -> Transmitter %d responded to MSG_ALIVE (will keep)", transmitterIndex);
+        }
+        
         // Mark as seen on boot if this is during the grace period
         if (!gracePeriodCheckDone) {
           transmitterSeenOnBoot[transmitterIndex] = true;
@@ -752,6 +787,40 @@ void loop() {
     sendAvailabilityBeacon();  // Broadcast availability to unpaired transmitters
     pingKnownTransmitters();   // Ping known transmitters during grace period only
     lastBeaconTime = millis();
+  }
+  
+  // Check if we're waiting for alive responses and timeout has expired
+  if (waitingForAliveResponses && millis() >= aliveResponseTimeout) {
+    debugPrint("Alive response timeout expired - checking for unresponsive transmitters");
+    
+    // Remove transmitters that didn't respond (in reverse order to avoid index issues)
+    for (int i = pairedCount - 1; i >= 0; i--) {
+      if (!transmitterResponded[i]) {
+        debugPrint("Transmitter %d did not respond - removing to make room for new transmitter", i);
+        removeTransmitter(i);
+      }
+    }
+    
+    // If we now have free slots, send MSG_ALIVE to the new transmitter
+    if (pedalSlotsUsed < MAX_PEDAL_SLOTS && memcmp(pendingNewTransmitterMAC, broadcastMAC, 6) != 0) {
+      debugPrint("Sending MSG_ALIVE to new transmitter to initiate pairing");
+      
+      // Add new transmitter as peer
+      esp_now_peer_info_t peerInfo = {};
+      memcpy(peerInfo.peer_addr, pendingNewTransmitterMAC, 6);
+      peerInfo.channel = 0;  // Will be updated when we receive response
+      peerInfo.encrypt = false;
+      esp_now_add_peer(&peerInfo);
+      
+      // Send MSG_ALIVE to initiate pairing
+      struct_message alive = {MSG_ALIVE, 0, false, 0};
+      esp_now_send(pendingNewTransmitterMAC, (uint8_t*)&alive, sizeof(alive));
+    }
+    
+    // Clear replacement state
+    waitingForAliveResponses = false;
+    memset(pendingNewTransmitterMAC, 0, 6);
+    aliveResponseTimeout = 0;
   }
   
   // Update LED status based on grace period
