@@ -53,12 +53,11 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   // Check if this is a debug message (minimum size: msgType + at least 1 byte of message)
   if (msgType == MSG_DEBUG && len >= 2) {
     debug_message msg;
+    // Copy the received data (senders already null-terminate their messages)
     memcpy(&msg, data, len < sizeof(debug_message) ? len : sizeof(debug_message));
     
-    // Ensure null termination
-    if (len < sizeof(debug_message)) {
-      msg.message[len - 1] = '\0';
-    }
+    // Safety: ensure null termination at end of buffer (in case of buffer overrun)
+    msg.message[sizeof(msg.message) - 1] = '\0';
     
     // Print debug message with sender MAC prefix
     Serial.print("[");
