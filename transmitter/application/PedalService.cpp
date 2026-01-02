@@ -19,11 +19,13 @@ void pedalService_setPairingService(PairingService* pairingService) {
 void onPedalPress(char key) {
   if (!g_pedalService) return;
   
-  // Always send debug message if enabled (even if debug monitor not paired, it goes to Serial)
+  // Log pedal press
   if (debugEnabled) {
-    unsigned long timeSinceBoot = millis() - g_pedalService->bootTime;
-    const char* pairedStr = pairingState_isPaired(g_pedalService->pairingState) ? "" : " (not paired)";
-    debugPrint("[%lu ms] Pedal %c PRESSED%s\n", timeSinceBoot, key, pairedStr);
+    if (pairingState_isPaired(g_pedalService->pairingState)) {
+      debugPrint("Pedal %c PRESSED\n", key);
+    } else {
+      debugPrint("Pedal %c PRESSED (not paired)\n", key);
+    }
   }
   
   // If not paired and we have a discovered receiver, initiate pairing
@@ -33,8 +35,7 @@ void onPedalPress(char key) {
     int slotsNeeded = getSlotsNeeded(g_pedalService->reader->pedalMode);
     if (g_pedalService->pairingState->discoveredAvailableSlots >= slotsNeeded) {
       if (debugEnabled) {
-        unsigned long timeSinceBoot = millis() - g_pedalService->bootTime;
-        debugPrint("[%lu ms] Initiating pairing due to pedal press\n", timeSinceBoot);
+        debugPrint("Initiating pairing...\n");
       }
       pairingService_initiatePairing(g_pairingService, 
                                      g_pedalService->pairingState->discoveredReceiverMAC, 0);
@@ -54,11 +55,13 @@ void onPedalPress(char key) {
 void onPedalRelease(char key) {
   if (!g_pedalService) return;
   
-  // Always send debug message if enabled (even if debug monitor not paired, it goes to Serial)
+  // Log pedal release
   if (debugEnabled) {
-    unsigned long timeSinceBoot = millis() - g_pedalService->bootTime;
-    const char* pairedStr = pairingState_isPaired(g_pedalService->pairingState) ? "" : " (not paired)";
-    debugPrint("[%lu ms] Pedal %c RELEASED%s\n", timeSinceBoot, key, pairedStr);
+    if (pairingState_isPaired(g_pedalService->pairingState)) {
+      debugPrint("Pedal %c RELEASED\n", key);
+    } else {
+      debugPrint("Pedal %c RELEASED (not paired)\n", key);
+    }
   }
   
   // Send pedal event if paired
@@ -104,15 +107,9 @@ void pedalService_sendPedalEvent(PedalService* service, char key, bool pressed) 
   bool sent = espNowTransport_send(service->transport, service->pairingState->pairedReceiverMAC, 
                                    (uint8_t*)&msg, sizeof(msg));
   
-  if (debugEnabled) {
-    unsigned long timeSinceBoot = millis() - service->bootTime;
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             service->pairingState->pairedReceiverMAC[0], service->pairingState->pairedReceiverMAC[1],
-             service->pairingState->pairedReceiverMAC[2], service->pairingState->pairedReceiverMAC[3],
-             service->pairingState->pairedReceiverMAC[4], service->pairingState->pairedReceiverMAC[5]);
-    debugPrint("[%lu ms] Sent pedal event: key='%c', %s -> %s (%s)\n",
-                timeSinceBoot, key, pressed ? "PRESSED" : "RELEASED", macStr, sent ? "sent" : "FAILED");
+  // Only log failures (successful sends are routine)
+  if (debugEnabled && !sent) {
+    debugPrint("Pedal event send FAILED: key='%c', %s\n", key, pressed ? "PRESSED" : "RELEASED");
   }
   
   if (service->lastActivityTime) {

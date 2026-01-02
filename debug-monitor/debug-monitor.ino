@@ -53,21 +53,36 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   // Check if this is a debug message (minimum size: msgType + at least 1 byte of message)
   if (msgType == MSG_DEBUG && len >= 2) {
     debug_message msg;
+    // Zero out the message buffer first to avoid garbage data
+    memset(&msg, 0, sizeof(msg));
+    
     // Copy the received data (senders already null-terminate their messages)
     memcpy(&msg, data, len < sizeof(debug_message) ? len : sizeof(debug_message));
     
     // Safety: ensure null termination at end of buffer (in case of buffer overrun)
     msg.message[sizeof(msg.message) - 1] = '\0';
     
-    // Print debug message with sender MAC prefix
-    Serial.print("[");
+    // Build the complete output string first to avoid Serial buffer issues
+    char output[256];
+    int offset = 0;
+    
+    // Add MAC prefix
+    output[offset++] = '[';
     for (int i = 0; i < 6; i++) {
-      if (senderMAC[i] < 0x10) Serial.print("0");
-      Serial.print(senderMAC[i], HEX);
-      if (i < 5) Serial.print(":");
+      if (senderMAC[i] < 0x10) {
+        output[offset++] = '0';
+      }
+      offset += sprintf(output + offset, "%02X", senderMAC[i]);
+      if (i < 5) {
+        output[offset++] = ':';
+      }
     }
-    Serial.print("] ");
-    Serial.println(msg.message);
+    offset += sprintf(output + offset, "] %s", msg.message);
+    
+    // Print the complete line at once to avoid corruption
+    Serial.println(output);
+    // Note: Serial.flush() waits for transmission to complete, which can block
+    // For high-frequency messages, we rely on the larger buffer instead
   }
 }
 
@@ -84,6 +99,8 @@ void sendBeacon() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setRxBufferSize(2048);  // Increase RX buffer
+  Serial.setTxBufferSize(2048);  // Increase TX buffer to handle burst messages
   delay(2000);
   
   Serial.println("========================================");

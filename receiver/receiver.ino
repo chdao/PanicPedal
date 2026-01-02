@@ -70,19 +70,21 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   // Handle transmitter paired broadcast
   if (len >= sizeof(transmitter_paired_message)) {
     transmitter_paired_message* pairedMsg = (transmitter_paired_message*)data;
-      if (pairedMsg->msgType == MSG_TRANSMITTER_PAIRED) {
-        int index = transmitterManager_findIndex(&transmitterManager, pairedMsg->transmitterMAC);
-        if (index < 0) {
-          // Transmitter paired with another receiver - remove from our list
-          debugMonitor_print(&debugMonitor, "Transmitter %02X:%02X:%02X:%02X:%02X:%02X paired with another receiver - removing",
-                           pairedMsg->transmitterMAC[0], pairedMsg->transmitterMAC[1], pairedMsg->transmitterMAC[2],
-                           pairedMsg->transmitterMAC[3], pairedMsg->transmitterMAC[4], pairedMsg->transmitterMAC[5]);
-        } else {
-          debugMonitor_print(&debugMonitor, "Transmitter %d paired with another receiver - removing", index);
-        }
-        receiverPairingService_handleTransmitterPaired(&pairingService, pairedMsg);
-        return;
+    if (pairedMsg->msgType == MSG_TRANSMITTER_PAIRED) {
+      // Check if it's paired with us or another receiver
+      uint8_t ourMAC[6];
+      WiFi.macAddress(ourMAC);
+      bool pairedWithUs = macEqual(pairedMsg->receiverMAC, ourMAC);
+      int index = transmitterManager_findIndex(&transmitterManager, pairedMsg->transmitterMAC);
+      
+      // Only log if it's being removed (paired with different receiver)
+      if (index >= 0 && !pairedWithUs) {
+        debugMonitor_print(&debugMonitor, "Transmitter %d paired with another receiver - removing", index);
       }
+      
+      receiverPairingService_handleTransmitterPaired(&pairingService, pairedMsg);
+      return;
+    }
   }
   
   // Handle standard messages
@@ -147,18 +149,15 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         } else {
           keyToPress = transmitterManager_getAssignedKey(&transmitterManager, transmitterIndex);
         }
-        debugMonitor_print(&debugMonitor, "Pedal event: transmitter %d, key '%c' %s", 
-                          transmitterIndex, keyToPress, msg->pressed ? "PRESSED" : "RELEASED");
+        debugMonitor_print(&debugMonitor, "T%d: '%c' %s", 
+                          transmitterIndex, keyToPress, msg->pressed ? "▼" : "▲");
       }
       keyboardService_handlePedalEvent(&keyboardService, senderMAC, msg);
       break;
     }
     
     case MSG_ALIVE: {
-      int index = transmitterManager_findIndex(&transmitterManager, senderMAC);
-      if (index >= 0) {
-        debugMonitor_print(&debugMonitor, "Received MSG_ALIVE from transmitter %d", index);
-      }
+      // Handle alive message (silently - these are routine heartbeats)
       receiverPairingService_handleAlive(&pairingService, senderMAC);
       break;
     }

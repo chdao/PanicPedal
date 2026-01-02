@@ -114,9 +114,12 @@ void debugMonitor_print(DebugMonitor* monitor, const char* format, ...) {
     msg.message[sizeof(msg.message) - 1] = '\0';  // Ensure null termination
   }
   
+  // Calculate actual message length (msgType + string length + null terminator)
+  size_t messageLen = 1 + strlen(msg.message) + 1;  // msgType + message + null
+  
   // Always try to send - no timeout/disconnect logic
   // If send fails, we'll keep trying (monitor will reconnect via beacon)
-  receiverEspNowTransport_send(monitor->transport, monitor->mac, (uint8_t*)&msg, sizeof(msg));
+  receiverEspNowTransport_send(monitor->transport, monitor->mac, (uint8_t*)&msg, messageLen);
 }
 
 void debugMonitor_update(DebugMonitor* monitor, unsigned long currentTime) {

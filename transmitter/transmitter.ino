@@ -24,9 +24,11 @@
 #define PEDAL_1_PIN 13
 #define PEDAL_2_PIN 14
 #define DEBUG_BUTTON_PIN 27  // FireBeetle button pin
-#define INACTIVITY_TIMEOUT 600000  // 10 minutes
-#define IDLE_DELAY_PAIRED 20  // 20ms delay when paired
+#define INACTIVITY_TIMEOUT 120000  // 2 minutes - reduced for better battery life
+#define IDLE_DELAY_PAIRED_MIN 10  // 10ms minimum delay for responsiveness after activity
+#define IDLE_DELAY_PAIRED_MAX 20  // 20ms maximum delay when idle
 #define IDLE_DELAY_UNPAIRED 200  // 200ms delay when not paired
+#define ACTIVITY_BOOST_DURATION 2000  // Keep responsive for 2 seconds after pedal press
 #define SERIAL_INIT_DELAY_MS 100
 #define HEARTBEAT_INTERVAL_MS 5000  // 5 seconds
 #define DEBUG_BUTTON_DEBOUNCE_MS 50  // Button debounce time
@@ -43,6 +45,7 @@ PedalService pedalService;
 
 // System state
 unsigned long lastActivityTime = 0;
+unsigned long lastPedalActivityTime = 0;  // Track last pedal press for dynamic delay
 unsigned long bootTime = 0;
 bool debugEnabled = false;  // Runtime debug state (controlled by button toggle)
 bool lastButtonState = HIGH;
@@ -78,25 +81,18 @@ void onPaired(const uint8_t* receiverMAC) {
            receiverMAC[0], receiverMAC[1], receiverMAC[2],
            receiverMAC[3], receiverMAC[4], receiverMAC[5]);
   
-  debugPrint("[%lu ms] Successfully paired with receiver: %s\n", millis() - bootTime, macStr);
+  debugPrint("Paired with receiver: %s\n", macStr);
 }
 
 void onActivity() {
   lastActivityTime = millis();
+  lastPedalActivityTime = millis();  // Track pedal activity for dynamic delay
 }
 
 void sendDeleteRecordMessage(const uint8_t* receiverMAC) {
   struct_message deleteMsg = {MSG_DELETE_RECORD, 0, false, 0};
   espNowTransport_send(&transport, receiverMAC, (uint8_t*)&deleteMsg, sizeof(deleteMsg));
-  
-  if (!debugEnabled) return;
-  
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-           receiverMAC[0], receiverMAC[1], receiverMAC[2],
-           receiverMAC[3], receiverMAC[4], receiverMAC[5]);
-  
-  debugPrint("[%lu ms] Sent delete record message to receiver: %s\n", millis() - bootTime, macStr);
+  // Debug message is sent by caller for context
 }
 
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel) {
@@ -107,77 +103,39 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   // Handle debug monitor discovery request (legacy)
   if (msgType == MSG_DEBUG_MONITOR_REQ) {
     debugMonitor_handleDiscoveryRequest(&debugMonitor, senderMAC, channel);
-    if (debugEnabled) {
-      debugMonitor_print(&debugMonitor, "Debug monitor discovery request received and processed");
-    }
-    return;
+    return;  // No debug spam for monitor internal operations
   }
   
   // Handle debug monitor beacon (new proactive discovery)
   if (msgType == MSG_DEBUG_MONITOR_BEACON && len >= sizeof(debug_monitor_beacon_message)) {
     debug_monitor_beacon_message* beacon = (debug_monitor_beacon_message*)data;
     debugMonitor_handleBeacon(&debugMonitor, beacon->monitorMAC, channel);
-    if (debugEnabled && !debugMonitor.paired) {
-      // Just paired via beacon
-      debugMonitor_print(&debugMonitor, "Debug monitor discovered via beacon");
-    }
-    return;
+    return;  // No debug spam for monitor internal operations
   }
   
-  if (debugEnabled) {
-    unsigned long timeSinceBoot = millis() - bootTime;
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             senderMAC[0], senderMAC[1], senderMAC[2],
-             senderMAC[3], senderMAC[4], senderMAC[5]);
-    debugPrint("[%lu ms] Received ESP-NOW message: len=%d, sender=%s\n", timeSinceBoot, len, macStr);
-  }
-  
-  // Handle beacon message
+  // Handle beacon message (silently - beacons are routine)
   if (msgType == MSG_BEACON && len >= sizeof(beacon_message)) {
     beacon_message* beacon = (beacon_message*)data;
     pairingService_handleBeacon(&pairingService, senderMAC, beacon);
-    
-    if (debugEnabled) {
-      unsigned long timeSinceBoot = millis() - bootTime;
-      debugPrint("[%lu ms] Received MSG_BEACON: slots=%d/%d\n", 
-                 timeSinceBoot, beacon->availableSlots, beacon->totalSlots);
-    }
     return;
   }
   
   // Handle other messages
   if (len < sizeof(struct_message)) {
-    if (debugEnabled) {
-      unsigned long timeSinceBoot = millis() - bootTime;
-      debugPrint("[%lu ms] Message too short\n", timeSinceBoot);
-    }
-    return;
+    return;  // Silently ignore short messages
   }
   
   struct_message* msg = (struct_message*)data;
   
-  if (debugEnabled) {
-    unsigned long timeSinceBoot = millis() - bootTime;
-    debugPrint("[%lu ms] Message type=%d, isPaired=%d\n", 
-               timeSinceBoot, msg->msgType, pairingState_isPaired(&pairingState));
-  }
-  
   if (pairingState_isPaired(&pairingState)) {
     // Already paired - check if message is from our paired receiver
     if (macEqual(senderMAC, pairingState.pairedReceiverMAC)) {
-      // Message from our paired receiver - accept it
-      if (debugEnabled) {
-        unsigned long timeSinceBoot = millis() - bootTime;
-        debugPrint("[%lu ms] Received message from paired receiver (type=%d)\n", 
-                   timeSinceBoot, msg->msgType);
-      }
+      // Message from our paired receiver - silently accept (no debug spam for normal operation)
     } else {
-      // Message from different receiver - send DELETE_RECORD
+      // Message from different receiver - conflict detected
       if (msg->msgType == MSG_ALIVE || msg->msgType == MSG_DISCOVERY_RESP) {
         if (debugEnabled) {
-          unsigned long timeSinceBoot = millis() - bootTime;
-          debugPrint("[%lu ms] Received message from different receiver - sending DELETE_RECORD\n", timeSinceBoot);
+          debugPrint("Conflict: message from different receiver, sending DELETE_RECORD\n");
         }
         
         espNowTransport_addPeer(&transport, senderMAC, channel);
@@ -214,9 +172,12 @@ void setup() {
   lastButtonChangeTime = millis();
   buttonPressed = false;
 
-  // Battery optimization
-  setCpuFrequencyMhz(80);
-  esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+  // Battery optimization: Reduce CPU frequency and enable WiFi power save
+  setCpuFrequencyMhz(80);  // 80MHz is sufficient for pedal operations
+  esp_wifi_set_ps(WIFI_PS_MAX_MODEM);  // Maximum WiFi power saving
+  
+  // Reduce WiFi transmit power for better battery life (pedals are used close to receiver)
+  esp_wifi_set_max_tx_power(40);  // Reduce from default 84 (20dBm) to 40 (10dBm)
   
   bootTime = millis();
   lastActivityTime = millis();
@@ -327,19 +288,28 @@ void loop() {
   // Update debug monitor (checks for beacons, manages connection)
   debugMonitor_update(&debugMonitor, currentTime);
   
-  // Periodic heartbeat to confirm loop is running (only when not paired and debug enabled)
+  // Periodic status when not paired (only when debug enabled)
   if (debugEnabled) {
     static unsigned long lastHeartbeat = 0;
     if (!pairingState_isPaired(&pairingState) && (currentTime - lastHeartbeat > HEARTBEAT_INTERVAL_MS)) {
-      debugPrint("[%lu ms] Waiting for receiver...\n", currentTime - bootTime);
+      debugPrint("Waiting for receiver...\n");
       lastHeartbeat = currentTime;
     }
   }
   
-  // Battery optimization: Variable delay based on pairing status
+  // Battery optimization: Dynamic delay based on pairing status and recent activity
   if (pairingState_isPaired(&pairingState)) {
-    delay(IDLE_DELAY_PAIRED);
+    // Use shorter delay immediately after pedal activity for better responsiveness
+    unsigned long timeSinceActivity = currentTime - lastPedalActivityTime;
+    if (timeSinceActivity < ACTIVITY_BOOST_DURATION) {
+      // Recently pressed - use minimal delay for best responsiveness
+      delay(IDLE_DELAY_PAIRED_MIN);
+    } else {
+      // Idle - use normal delay for better power savings
+      delay(IDLE_DELAY_PAIRED_MAX);
+    }
   } else {
+    // Not paired - use longer delay to save battery while searching
     delay(IDLE_DELAY_UNPAIRED);
   }
 }
