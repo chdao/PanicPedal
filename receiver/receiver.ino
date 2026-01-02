@@ -219,6 +219,17 @@ void setup() {
       receiverEspNowTransport_addPeer(&transport, debugMonitor.mac, 0);
       delay(DEBUG_MONITOR_PEER_READY_DELAY_MS);
     }
+    
+    // Send MSG_ALIVE to all known transmitters immediately on boot
+    // This helps them reconnect quickly without waiting for periodic pings
+    if (transmitterManager.count > 0) {
+      struct_message alive = {MSG_ALIVE, 0, false, 0};
+      for (int i = 0; i < transmitterManager.count; i++) {
+        receiverEspNowTransport_send(&transport, transmitterManager.transmitters[i].mac, 
+                                     (uint8_t*)&alive, sizeof(alive));
+        delay(10);  // Small delay between messages to avoid congestion
+      }
+    }
   }
   
   // Don't send status messages here - they will be sent when the monitor's beacon is received
