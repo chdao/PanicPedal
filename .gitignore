@@ -50,3 +50,6 @@ libraries/
 *.tmp
 *.log
 
+# KiCad PCB design files
+kicad-pcb/
+
