@@ -146,13 +146,14 @@ All design files are included in this directory:
 - `esp32-pedal-pcb.kicad_pcb` - PCB layout
 - `esp32-pedal-pcb.kicad_dru` - Design rules
 - `esp32-pedal-pcb.rules` - Custom design rules
+- `esp32-pedal-pcb.csv` - Bill of Materials (BOM)
 
 ## TODO
 
 - [x] Complete schematic
 - [x] Create PCB layout
 - [x] Design rule check (DRC)
+- [x] Generate BOM
 - [ ] Generate Gerber files
 - [ ] Create assembly drawings
-- [ ] Generate BOM
 
