@@ -50,6 +50,22 @@ libraries/
 *.tmp
 *.log
 
-# KiCad PCB design files
-kicad-pcb/
+# KiCad PCB design files - ignore temporary/generated files
+kicad-pcb/_autosave-*
+kicad-pcb/#auto_saved_files#
+kicad-pcb/~*.lck
+kicad-pcb/esp32-pedal-pcb-backups/
+kicad-pcb/esp32-pedal-pcb-simple.kicad_sch
+kicad-pcb/*.dsn
+kicad-pcb/*.kicad_dru
+kicad-pcb/*.kicad_prl
+kicad-pcb/*.rules
+kicad-pcb/*.ses
+kicad-pcb/fp-info-cache
+kicad-pcb/metadata.json
+kicad-pcb/resources/
+kicad-pcb/3dmodels/
+kicad-pcb/ADD_LIBRARIES.md
+kicad-pcb/FIX_QUESTION_MARKS.md
+kicad-pcb/LIBRARY_SETUP.md
 
