@@ -115,7 +115,11 @@ EN:     Reset button (pulled high, button to GND)
 ## PCB Layout Notes
 
 Given the 215.9mm x 25.4mm constraint:
-- **2-layer PCB** recommended (cost-effective)
+- **4-layer PCB**
+  - Layer 1 (Top): Component placement and signal routing
+  - Layer 2: Power planes and routing
+  - Layer 3: Ground plane
+  - Layer 4 (Bottom): Signal routing
 - **Component placement**:
   - USB-C connector at one end
   - Battery connector at opposite end
@@ -123,8 +127,6 @@ Given the 215.9mm x 25.4mm constraint:
   - LEDs near ESP32 for visibility
   - Charging IC near USB-C
   - Regulator between battery and ESP32
-- **Ground plane** on bottom layer (Layer 2)
-- **Power traces** on top layer (Layer 1)
 - **USB differential pairs**: Keep D+/D- traces matched length, ~90Ω impedance
 - **Mounting holes**: 4x M3 holes at corners (optional)
 
