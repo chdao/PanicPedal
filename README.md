@@ -37,6 +37,16 @@ A wireless pedal system using ESP-NOW for low-latency communication between peda
 **Debug Monitor (optional):**
 - Any ESP32 board with Serial/USB support
 
+### Custom PCB Design
+
+A custom PCB design is available in the [`kicad-pcb/`](kicad-pcb/) directory:
+- **Board Size**: 215.9mm x 25.4mm (8.5" x 1")
+- **MCU**: ESP32-S3-WROOM-1 (native USB support)
+- **Features**: USB-C charging, battery management, status LEDs, battery voltage monitoring
+- **Status**: ⚠️ **UNTESTED** - This is a design-only PCB that has not been manufactured or tested
+
+See [`kicad-pcb/README.md`](kicad-pcb/README.md) for complete design documentation and schematics.
+
 ### Components
 
 **Transmitter:**
