@@ -4,11 +4,6 @@
 #include <Arduino.h>
 #include "../shared/messages.h"
 
-// Optimized slot calculation - inline for speed
-static inline int getSlotsNeeded(uint8_t pedalMode) {
-  return (pedalMode == 0) ? 2 : 1;
-}
-
 void receiverPairingService_init(ReceiverPairingService* service, TransmitterManager* manager, 
                                   ReceiverEspNowTransport* transport, unsigned long bootTime) {
   service->manager = manager;
