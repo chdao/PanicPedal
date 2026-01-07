@@ -53,3 +53,7 @@ libraries/
 # PCB manufacturing files
 kicad-pcb/PCBWAY/
 
+# KiCad lock files
+~*.kicad_pcb.lck
+~*.kicad_sch.lck
+
