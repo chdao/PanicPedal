@@ -21,7 +21,8 @@ This directory contains the firmware for the **PanicPedal Pro** transmitter PCB.
 
 ## Configuration
 
-- **Pedal Mode**: Dual pedal (GPIO7 & GPIO21)
+- **Pedal Mode**: Single pedal (GPIO7) by default
+- **Dual Pedal Mode**: Set `PEDAL_MODE` to 0 to enable GPIO21 as second pedal
 - **Deep Sleep Wakeup**: GPIO7 (LOW trigger)
 
 ## Building and Uploading

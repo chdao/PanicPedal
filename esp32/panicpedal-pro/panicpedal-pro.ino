@@ -14,7 +14,7 @@
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
-#define PEDAL_MODE 0  // 0=DUAL (GPIO7 & GPIO21), 1=SINGLE (GPIO7 only)
+#define PEDAL_MODE 1  // 0=DUAL (GPIO7 & GPIO21), 1=SINGLE (GPIO7 only)
 #define DEBUG_ENABLED 1  // Set to 0 to disable Serial output and save battery
 // ============================================================================
 
