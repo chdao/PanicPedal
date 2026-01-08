@@ -24,12 +24,13 @@ This directory contains the firmware for the **PanicPedal Pro** transmitter PCB.
 ## Configuration
 
 - **Pedal Mode**: Auto-detected on first boot and stored in NVRAM
-  - Detection runs only once on first boot (or after firmware flash)
-  - Detected mode is stored in NVS (Non-Volatile Storage) and persists across reboots
+  - Detection runs on first boot or when firmware version changes
+  - Detected mode is stored in NVS (Non-Volatile Storage) along with firmware version
+  - If firmware version in code changes, detection will run again automatically
   - If both switches are connected: Dual pedal mode (GPIO7 & GPIO21)
   - If only first switch is connected: Single pedal mode (GPIO7)
   - Detection uses NC contacts (GPIO45 & GPIO46) to sense switch presence
-  - To re-detect: Flash new firmware or clear NVS
+  - To force re-detection: Increment `FIRMWARE_VERSION` in code or clear NVS manually
 - **Manual Override**: Set `PEDAL_MODE` to `PEDAL_MODE_DUAL` (0) or `PEDAL_MODE_SINGLE` (1) to override auto-detection
 - **Deep Sleep Wakeup**: GPIO7 (LOW trigger)
 

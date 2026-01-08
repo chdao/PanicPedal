@@ -20,6 +20,9 @@
 #define PEDAL_MODE_SINGLE 1    // Force single pedal mode (GPIO7 only)
 #define PEDAL_MODE PEDAL_MODE_AUTO  // Change to PEDAL_MODE_DUAL or PEDAL_MODE_SINGLE to override auto-detection
 #define DEBUG_ENABLED 1  // Set to 0 to disable Serial output and save battery
+
+// Firmware version - increment this to force re-detection on next boot
+#define FIRMWARE_VERSION "1.0.0"
 // ============================================================================
 
 // GPIO Pin Definitions (PanicPedal Pro - ESP32-S3-WROOM)
@@ -54,6 +57,7 @@ unsigned long bootTime = 0;
 Preferences preferences;
 #define NVS_NAMESPACE "pedal"
 #define NVS_KEY_PEDAL_MODE "mode"
+#define NVS_KEY_FIRMWARE_VERSION "fw_ver"
 
 // Forward declarations
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel);
@@ -215,29 +219,48 @@ uint8_t detectPedalMode() {
     detectedMode = PEDAL_MODE_SINGLE;
   }
   
-  // Store detected mode in NVS so it persists across reboots
+  // Store detected mode and firmware version in NVS so it persists across reboots
   preferences.begin(NVS_NAMESPACE, false);
   preferences.putUChar(NVS_KEY_PEDAL_MODE, detectedMode);
+  preferences.putString(NVS_KEY_FIRMWARE_VERSION, FIRMWARE_VERSION);
   preferences.end();
   
   #if DEBUG_ENABLED
   Serial.print("Stored pedal mode in NVS: ");
-  Serial.println(detectedMode == PEDAL_MODE_DUAL ? "DUAL" : "SINGLE");
+  Serial.print(detectedMode == PEDAL_MODE_DUAL ? "DUAL" : "SINGLE");
+  Serial.print(", firmware version: ");
+  Serial.println(FIRMWARE_VERSION);
   #endif
   
   return detectedMode;
 }
 
-uint8_t loadPedalModeFromNVS() {
+uint8_t loadPedalModeFromNVS(bool* needsRedetection) {
   preferences.begin(NVS_NAMESPACE, true);  // Read-only mode
   uint8_t storedMode = preferences.getUChar(NVS_KEY_PEDAL_MODE, 255);  // 255 = not found
+  String storedVersion = preferences.getString(NVS_KEY_FIRMWARE_VERSION, "");
   preferences.end();
   
-  if (storedMode == 255) {
-    // No stored value found
+  if (storedMode == 255 || storedVersion.length() == 0) {
+    // No stored value found - needs detection
+    if (needsRedetection) *needsRedetection = true;
     return 255;
   }
   
+  // Check if firmware version matches
+  if (storedVersion != String(FIRMWARE_VERSION)) {
+    #if DEBUG_ENABLED
+    Serial.print("Firmware version mismatch - stored: ");
+    Serial.print(storedVersion);
+    Serial.print(", current: ");
+    Serial.println(FIRMWARE_VERSION);
+    #endif
+    if (needsRedetection) *needsRedetection = true;
+    return 255;  // Force re-detection
+  }
+  
+  // Version matches, use stored mode
+  if (needsRedetection) *needsRedetection = false;
   return storedMode;
 }
 
@@ -267,21 +290,28 @@ void setup() {
   uint8_t detectedMode = PEDAL_MODE;
   
   if (PEDAL_MODE == PEDAL_MODE_AUTO) {
-    // Check NVS first - if stored value exists, use it
-    uint8_t storedMode = loadPedalModeFromNVS();
+    // Check NVS first - if stored value exists and firmware version matches, use it
+    bool needsRedetection = false;
+    uint8_t storedMode = loadPedalModeFromNVS(&needsRedetection);
     
-    if (storedMode != 255) {
-      // Use stored mode from NVS
+    if (!needsRedetection && storedMode != 255) {
+      // Use stored mode from NVS (version matches)
       detectedMode = storedMode;
       #if DEBUG_ENABLED
       Serial.print("Loaded pedal mode from NVS: ");
-      Serial.println(detectedMode == PEDAL_MODE_DUAL ? "DUAL (GPIO7 & GPIO21)" : "SINGLE (GPIO7)");
+      Serial.print(detectedMode == PEDAL_MODE_DUAL ? "DUAL (GPIO7 & GPIO21)" : "SINGLE (GPIO7)");
+      Serial.print(", firmware version: ");
+      Serial.println(FIRMWARE_VERSION);
       #endif
     } else {
-      // No stored value - run detection and store it
+      // No stored value or firmware version changed - run detection and store it
       detectedMode = detectPedalMode();
       #if DEBUG_ENABLED
-      Serial.print("Auto-detected mode (first boot): ");
+      if (needsRedetection) {
+        Serial.print("Firmware version changed - re-detecting pedal mode: ");
+      } else {
+        Serial.print("Auto-detected mode (first boot): ");
+      }
       Serial.println(detectedMode == PEDAL_MODE_DUAL ? "DUAL (GPIO7 & GPIO21)" : "SINGLE (GPIO7)");
       #endif
     }
