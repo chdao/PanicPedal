@@ -4,6 +4,8 @@ A wireless pedal system using ESP-NOW for low-latency communication between peda
 
 **Original Design**: This project is based on the [Perfectly Adequate Arcade Pedal (Wireless)](https://www.printables.com/model/1220746-perfectly-adequate-arcade-pedal-wireless) design on Printables. All initial ideas and the pedal model come from that design.
 
+**PCB Project**: The custom PCB design is called **PanicPedal Pro** and includes an ESP32-S3-WROOM with automatic pedal detection. See `kicad-pcb/` for the KiCad project files and `esp32/panicpedal-pro/` for the firmware.
+
 **⚠️ IMPORTANT CORRECTION**: The original schematic shows TP4056 OUT+ connected to the 3V3 pin. This is **INCORRECT** and can damage the ESP32. The TP4056 OUT+ must connect to **VCC** instead. See the [Wiring Diagram](#wiring-diagram) section below for the correct connections.
 
 ## Overview
@@ -35,7 +37,7 @@ This project consists of:
 
 **Transmitters:**
 - [FireBeetle 2 ESP32-E](https://www.dfrobot.com/product-2195.html) - Optimized for low power consumption, ideal for battery-powered pedal transmitters
-- **PanicPedal Pro** - Custom PCB with ESP32-S3-WROOM featuring automatic pedal detection (see `esp32/panicpedal-pro/README.md` for details)
+- **PanicPedal Pro** - Custom PCB project with ESP32-S3-WROOM featuring automatic pedal detection (see `esp32/panicpedal-pro/README.md` for details)
 
 **Receiver:**
 - [ESP32-S3-DevKitC-1-N16R8](https://www.amazon.com/dp/B0CC8NYXRG) - ESP32-S3 board with native USB support for HID Keyboard functionality
