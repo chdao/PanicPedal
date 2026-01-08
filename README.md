@@ -9,7 +9,9 @@ A wireless pedal system using ESP-NOW for low-latency communication between peda
 ## Overview
 
 This project consists of:
-- **Transmitter**: ESP32-based pedal device that sends key press/release events via ESP-NOW (`esp32/firebeetle2/firebeetle2.ino`)
+- **Transmitters**: ESP32-based pedal devices that send key press/release events via ESP-NOW
+  - **FireBeetle 2**: `esp32/firebeetle2/firebeetle2.ino` - Configurable single or dual pedal mode
+  - **PanicPedal Pro**: `esp32/panicpedal-pro/panicpedal-pro.ino` - Custom PCB with automatic pedal detection (1 or 2 pedals)
 - **Receiver**: ESP32-S2/S3 device that receives ESP-NOW messages and types keys via USB HID Keyboard (`esp32/receiver/receiver.ino`)
 
 **Note**: `espnow-pedal.cpp` is included as a reference file showing the original implementation. The actual project files are in the `esp32/` directory.
@@ -18,6 +20,7 @@ This project consists of:
 
 - **Low latency**: ESP-NOW provides fast, direct communication without WiFi connection
 - **Multiple pedal modes**: Supports single pedal (LEFT or RIGHT) or dual pedal configurations
+- **Automatic pedal detection** (PanicPedal Pro): Automatically detects whether 1 or 2 pedals are connected using NC (normally-closed) contacts - no manual configuration needed
 - **Press and hold**: Keys stay pressed until pedal is released
 - **Independent operation**: Both pedals can be pressed simultaneously
 - **Battery efficient**: Includes inactivity timeout and deep sleep support
@@ -30,16 +33,18 @@ This project consists of:
 
 ### Recommended Boards
 
-**Transmitter:**
+**Transmitters:**
 - [FireBeetle 2 ESP32-E](https://www.dfrobot.com/product-2195.html) - Optimized for low power consumption, ideal for battery-powered pedal transmitters
+- **PanicPedal Pro** - Custom PCB with ESP32-S3-WROOM featuring automatic pedal detection (see `esp32/panicpedal-pro/README.md` for details)
 
 **Receiver:**
 - [ESP32-S3-DevKitC-1-N16R8](https://www.amazon.com/dp/B0CC8NYXRG) - ESP32-S3 board with native USB support for HID Keyboard functionality
 
 ### Transmitter
-- ESP32 (tested with FireBeetle 2 ESP32-E)
+- ESP32 (tested with FireBeetle 2 ESP32-E and ESP32-S3-WROOM for PanicPedal Pro)
 - Pedal switches (normally-open, connected to GPIO with pull-up)
 - Optional: LED for status indication
+- **PanicPedal Pro**: Uses NC (normally-closed) contacts for automatic detection of connected pedals
 
 ### Receiver
 - ESP32-S2 or ESP32-S3 (for USB HID Keyboard support)
