@@ -9,10 +9,10 @@ A wireless pedal system using ESP-NOW for low-latency communication between peda
 ## Overview
 
 This project consists of:
-- **Transmitter**: ESP32-based pedal device that sends key press/release events via ESP-NOW (`transmitter/transmitter.ino`)
-- **Receiver**: ESP32-S2/S3 device that receives ESP-NOW messages and types keys via USB HID Keyboard (`receiver/receiver.ino`)
+- **Transmitter**: ESP32-based pedal device that sends key press/release events via ESP-NOW (`esp32/firebeetle2/firebeetle2.ino`)
+- **Receiver**: ESP32-S2/S3 device that receives ESP-NOW messages and types keys via USB HID Keyboard (`esp32/receiver/receiver.ino`)
 
-**Note**: `espnow-pedal.cpp` is included as a reference file showing the original implementation. The actual project files are in the `transmitter/` and `receiver/` directories.
+**Note**: `espnow-pedal.cpp` is included as a reference file showing the original implementation. The actual project files are in the `esp32/` directory.
 
 ## Features
 
@@ -116,7 +116,7 @@ LED (cathode)          ───> GND
 
 ### 1. Configure Transmitter
 
-Open `transmitter/transmitter.ino` and set the pedal mode:
+Open `esp32/firebeetle2/firebeetle2.ino` and set the pedal mode:
 
 ```cpp
 #define PEDAL_MODE 1  // 0 = DUAL_PEDAL, 1 = SINGLE_PEDAL
@@ -137,8 +137,8 @@ The receiver requires no configuration - it automatically discovers and pairs wi
 
 ### 3. Upload Code
 
-1. Upload `receiver/receiver.ino` to your ESP32-S2/S3 receiver board
-2. Upload `transmitter/transmitter.ino` to your ESP32 transmitter board(s)
+1. Upload `esp32/receiver/receiver.ino` to your ESP32-S2/S3 receiver board
+2. Upload `esp32/firebeetle2/firebeetle2.ino` to your ESP32 transmitter board(s)
 3. No MAC address configuration needed - everything is automatic!
 
 ## Usage

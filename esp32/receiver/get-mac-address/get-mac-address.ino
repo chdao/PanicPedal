@@ -3,9 +3,9 @@
  * 
  * Upload this sketch to your ESP32-S2/S3 receiver first to get its MAC address.
  * The MAC address will be displayed in the Serial Monitor.
- * Copy this MAC address and update it in transmitter/transmitter.ino
+ * Copy this MAC address and update it in esp32/firebeetle2/firebeetle2.ino
  * 
- * NOTE: This is a helper sketch. After getting the MAC address, upload receiver/receiver.ino
+ * NOTE: This is a helper sketch. After getting the MAC address, upload esp32/receiver/receiver.ino
  */
 
 #include <WiFi.h>
@@ -42,7 +42,7 @@ void setup() {
   WiFi.macAddress(mac);
   
   // Display in exact format needed for transmitter (lowercase hex)
-  Serial.println("Copy this line to transmitter/transmitter.ino (around line 45):");
+  Serial.println("Copy this line to esp32/firebeetle2/firebeetle2.ino (around line 45):");
   Serial.print("uint8_t broadcastAddress[] = {");
   
   for (int i = 0; i < 6; i++) {
