@@ -121,11 +121,13 @@ LED (cathode)          ───> GND
 
 ### 1. Configure Transmitter
 
-Open `esp32/firebeetle2/firebeetle2.ino` and set the pedal mode:
+**FireBeetle 2**: Open `esp32/firebeetle2/firebeetle2.ino` and set the pedal mode:
 
 ```cpp
 #define PEDAL_MODE 1  // 0 = DUAL_PEDAL, 1 = SINGLE_PEDAL
 ```
+
+**PanicPedal Pro**: No configuration needed! The firmware automatically detects whether 1 or 2 pedals are connected using the NC (normally-closed) contacts. Detection runs on first boot and whenever the firmware version changes.
 
 **Note**: The receiver automatically assigns keys based on pairing order:
 - First paired transmitter: LEFT pedal ('l')
