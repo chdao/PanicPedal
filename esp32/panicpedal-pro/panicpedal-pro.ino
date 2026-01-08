@@ -4,6 +4,14 @@
 #include "esp_wifi.h"
 #include <Preferences.h>
 
+// Include auto-generated version header (if it exists)
+// Run get_version.ps1 (Windows) or get_version.sh (Linux/Mac) before building
+#ifdef __has_include
+  #if __has_include("version.h")
+    #include "version.h"
+  #endif
+#endif
+
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
 #include "domain/PairingState.h"
@@ -21,8 +29,14 @@
 #define PEDAL_MODE PEDAL_MODE_AUTO  // Change to PEDAL_MODE_DUAL or PEDAL_MODE_SINGLE to override auto-detection
 #define DEBUG_ENABLED 1  // Set to 0 to disable Serial output and save battery
 
-// Firmware version - increment this to force re-detection on next boot
-#define FIRMWARE_VERSION "1.0.0"
+// Firmware version - auto-generated from git commit hash (see get_version.ps1/get_version.sh)
+// Falls back to manual version if version.h doesn't exist
+#ifdef FIRMWARE_VERSION
+  // Version from auto-generated version.h (git commit hash)
+#else
+  // Fallback manual version - update this if not using git hash
+  #define FIRMWARE_VERSION "1.0.0"
+#endif
 // ============================================================================
 
 // GPIO Pin Definitions (PanicPedal Pro - ESP32-S3-WROOM)
