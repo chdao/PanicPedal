@@ -22,15 +22,15 @@
 // ============================================================================
 
 // GPIO Pin Definitions (PanicPedal Pro - ESP32-S3-WROOM)
-#define LED_PIN 2              // Inolux_IN-PI554FCH LED control
+#define PEDAL_1_PIN 1          // First foot switch NO (normally open)
+#define PEDAL_2_PIN 2          // Second foot switch NO (normally open)
 #define BATTERY_VOLTAGE_PIN 3  // Battery voltage sensing (before TLV75733PDBV)
-#define BATTERY_STAT1_PIN 4    // Battery STAT1 from MCP73871
-#define SWITCH_POS1_PIN 5      // 2-position switch position 1 (unused)
-#define SWITCH_POS2_PIN 6      // 2-position switch position 2 (unused)
-#define PEDAL_1_PIN 7          // First foot switch NO (normally open)
-#define PEDAL_2_PIN 21         // Second foot switch NO (normally open)
-#define PEDAL_1_NC_PIN 45      // First foot switch NC (normally closed) - for detection
-#define PEDAL_2_NC_PIN 46      // Second foot switch NC (normally closed) - for detection
+#define BATTERY_STAT1_PIN 4    // STAT1/LBO from MCP73871 (charging status)
+#define SWITCH_POS1_PIN 5      // Single pole double throw switch position 1
+#define SWITCH_POS2_PIN 6      // Single pole double throw switch position 2
+#define LED_PIN 7              // Inolux_IN-PI554FCH LED DIN
+#define PEDAL_1_NC_PIN 28      // First foot switch NC (normally closed) - for detection
+#define PEDAL_2_NC_PIN 29      // Second foot switch NC (normally closed) - for detection
 
 #define INACTIVITY_TIMEOUT 600000  // 10 minutes
 #define IDLE_DELAY_PAIRED 20  // 20ms delay when paired
