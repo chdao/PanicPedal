@@ -57,3 +57,9 @@ kicad-pcb/PCBWAY/
 ~*.kicad_pcb.lck
 ~*.kicad_sch.lck
 
+# KiCad autosave files
+_autosave-*.kicad_pcb
+_autosave-*.kicad_pro
+_autosave-*.kicad_prl
+#auto_saved_files#
+
