@@ -18,6 +18,10 @@ void pedalService_setPairingService(PairingService* pairingService) {
   g_pairingService = pairingService;
 }
 
+void pedalService_setLEDService(void* ledService) {
+  g_ledService = (LEDService*)ledService;
+}
+
 void onPedalPress(char key) {
   if (!g_pedalService) return;
   
