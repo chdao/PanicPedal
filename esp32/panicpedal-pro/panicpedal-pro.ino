@@ -325,6 +325,19 @@ void loop() {
   // Update pedal service (handles pedal reading and events)
   pedalService_update(&pedalService);
   
+  // Check charging status and update LED accordingly
+  if (isCharging()) {
+    // Battery is charging - show green LED
+    if (ledService.state != LED_STATE_CHARGING) {
+      ledService_setState(&ledService, LED_STATE_CHARGING);
+    }
+  } else if (pairingState_isPaired(&pairingState)) {
+    // Paired and not charging - LED off to save battery
+    if (ledService.state != LED_STATE_PAIRED) {
+      ledService_setState(&ledService, LED_STATE_PAIRED);
+    }
+  }
+  
   // Update LED service
   ledService_update(&ledService, currentTime);
   
