@@ -8,8 +8,8 @@
 typedef enum {
   LED_STATE_OFF = 0,
   LED_STATE_PAIRING,      // Blinking blue - searching for receiver
-  LED_STATE_PAIRED,       // Solid green - paired with receiver
-  LED_STATE_PEDAL_PRESS,  // Brief flash - pedal pressed
+  LED_STATE_PAIRED,       // Off - paired with receiver (LED off to save battery)
+  LED_STATE_CHARGING,     // Solid green - battery is charging
   LED_STATE_ERROR         // Red - error state
 } LEDState;
 

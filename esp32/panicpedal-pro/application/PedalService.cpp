@@ -53,11 +53,7 @@ void onPedalPress(char key) {
     pedalService_sendPedalEvent(g_pedalService, key, true);
   }
   
-  // Flash LED when pedal is pressed
-  if (g_ledService) {
-    ledService_setState(g_ledService, LED_STATE_PEDAL_PRESS);
-    ledService_update(g_ledService, millis());
-  }
+  // LED stays off during pedal press (battery saving)
   
   if (g_pedalService->onActivity) {
     g_pedalService->onActivity();
@@ -81,10 +77,7 @@ void onPedalRelease(char key) {
     pedalService_sendPedalEvent(g_pedalService, key, false);
   }
   
-  // Return LED to paired state when pedal is released
-  if (g_ledService && pairingState_isPaired(g_pedalService->pairingState)) {
-    ledService_setState(g_ledService, LED_STATE_PAIRED);
-  }
+  // LED stays off after pedal release (battery saving)
   
   if (g_pedalService->onActivity) {
     g_pedalService->onActivity();

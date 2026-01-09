@@ -72,7 +72,7 @@ void onPaired(const uint8_t* receiverMAC) {
   Serial.println();
   #endif
   
-  // Update LED to show paired state
+  // Turn LED off after pairing to save battery
   ledService_setState(&ledService, LED_STATE_PAIRED);
 }
 
@@ -186,6 +186,15 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   }
 }
 
+
+bool isCharging() {
+  // Read STAT1/LBO pin from MCP73871
+  // Pin is LOW when charging, HIGH when not charging or low battery
+  // Configure as input with pull-up
+  pinMode(BATTERY_STAT1_PIN, INPUT_PULLUP);
+  delay(1);  // Small delay for pin to stabilize
+  return (digitalRead(BATTERY_STAT1_PIN) == LOW);
+}
 
 uint8_t detectPedalMode() {
   // Configure NC pins as inputs with pull-ups to detect switch connections

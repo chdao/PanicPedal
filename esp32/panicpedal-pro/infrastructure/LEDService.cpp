@@ -99,20 +99,13 @@ void ledService_update(LEDService* service, unsigned long currentTime) {
       break;
       
     case LED_STATE_PAIRED:
-      // Solid green
-      ledService_setColor(service, 0, 255, 0, 128);  // Green, medium brightness
+      // Off - LED disabled after pairing to save battery
+      ledService_setColor(service, 0, 0, 0, 0);
       break;
       
-    case LED_STATE_PEDAL_PRESS:
-      // Brief white flash (100ms)
-      if (elapsed < 100) {
-        ledService_setColor(service, 255, 255, 255, 200);  // White, bright
-      } else {
-        // Return to previous state (paired or off)
-        if (service->state == LED_STATE_PEDAL_PRESS) {
-          service->state = LED_STATE_PAIRED;  // Default back to paired
-        }
-      }
+    case LED_STATE_CHARGING:
+      // Solid green - battery is charging
+      ledService_setColor(service, 0, 255, 0, 128);  // Green, medium brightness
       break;
       
     case LED_STATE_ERROR:
