@@ -1,5 +1,6 @@
 #include "PedalService.h"
 #include "../application/PairingService.h"
+#include "../infrastructure/LEDService.h"
 #include <string.h>
 #include <stdarg.h>
 #include <Arduino.h>
@@ -11,6 +12,7 @@ extern bool debugEnabled;
 
 static PedalService* g_pedalService = nullptr;
 static PairingService* g_pairingService = nullptr;
+static LEDService* g_ledService = nullptr;
 
 void pedalService_setPairingService(PairingService* pairingService) {
   g_pairingService = pairingService;
@@ -47,6 +49,12 @@ void onPedalPress(char key) {
     pedalService_sendPedalEvent(g_pedalService, key, true);
   }
   
+  // Flash LED when pedal is pressed
+  if (g_ledService) {
+    ledService_setState(g_ledService, LED_STATE_PEDAL_PRESS);
+    ledService_update(g_ledService, millis());
+  }
+  
   if (g_pedalService->onActivity) {
     g_pedalService->onActivity();
   }
@@ -67,6 +75,11 @@ void onPedalRelease(char key) {
   // Send pedal event if paired
   if (pairingState_isPaired(g_pedalService->pairingState)) {
     pedalService_sendPedalEvent(g_pedalService, key, false);
+  }
+  
+  // Return LED to paired state when pedal is released
+  if (g_ledService && pairingState_isPaired(g_pedalService->pairingState)) {
+    ledService_setState(g_ledService, LED_STATE_PAIRED);
   }
   
   if (g_pedalService->onActivity) {

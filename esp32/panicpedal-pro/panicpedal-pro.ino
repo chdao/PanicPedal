@@ -8,6 +8,7 @@
 #include "domain/PairingState.h"
 #include "domain/PedalReader.h"
 #include "infrastructure/EspNowTransport.h"
+#include "infrastructure/LEDService.h"
 #include "application/PairingService.h"
 #include "application/PedalService.h"
 
@@ -42,6 +43,9 @@ PairingState pairingState;
 PedalReader pedalReader;
 EspNowTransport transport;
 
+// Infrastructure layer instances
+LEDService ledService;
+
 // Application layer instances
 PairingService pairingService;
 PedalService pedalService;
@@ -67,6 +71,9 @@ void onPaired(const uint8_t* receiverMAC) {
   }
   Serial.println();
   #endif
+  
+  // Update LED to show paired state
+  ledService_setState(&ledService, LED_STATE_PAIRED);
 }
 
 void onActivity() {
@@ -264,6 +271,7 @@ void setup() {
   
   // Initialize infrastructure layer
   espNowTransport_init(&transport);
+  ledService_init(&ledService, LED_DIN_PIN, LED_CLK_PIN);
   
   // Add broadcast peer
   uint8_t broadcastMAC[] = BROADCAST_MAC;
@@ -277,6 +285,10 @@ void setup() {
   pedalService_init(&pedalService, &pedalReader, &pairingState, &transport, &lastActivityTime);
   pedalService.onActivity = onActivity;
   pedalService_setPairingService(&pairingService);
+  pedalService_setLEDService(&ledService);
+  
+  // Set initial LED state to pairing
+  ledService_setState(&ledService, LED_STATE_PAIRING);
   
   // Broadcast that we're online
   pairingService_broadcastOnline(&pairingService);
@@ -304,6 +316,9 @@ void loop() {
   // Update pedal service (handles pedal reading and events)
   pedalService_update(&pedalService);
   
+  // Update LED service
+  ledService_update(&ledService, currentTime);
+  
   // Battery optimization: Variable delay based on pairing status
   if (pairingState_isPaired(&pairingState)) {
     delay(IDLE_DELAY_PAIRED);
@@ -316,5 +331,6 @@ void loop() {
 #include "domain/PairingState.cpp"
 #include "domain/PedalReader.cpp"
 #include "infrastructure/EspNowTransport.cpp"
+#include "infrastructure/LEDService.cpp"
 #include "application/PairingService.cpp"
 #include "application/PedalService.cpp"
