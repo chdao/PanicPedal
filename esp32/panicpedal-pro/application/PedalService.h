@@ -19,9 +19,9 @@ typedef struct {
 
 void pedalService_init(PedalService* service, PedalReader* reader, PairingState* pairingState, 
                        EspNowTransport* transport, unsigned long* lastActivityTime);
-void pedalService_setPairingService(PairingService* pairingService);
+void pedalService_setPairingService(PedalService* pairingService);
+void pedalService_setLEDService(void* ledService);
 void pedalService_update(PedalService* service);
 void pedalService_sendPedalEvent(PedalService* service, char key, bool pressed);
 
 #endif // PEDAL_SERVICE_H
-
