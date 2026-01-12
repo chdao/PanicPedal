@@ -50,8 +50,8 @@ This directory contains the firmware for the **PanicPedal Pro** transmitter PCB.
   - If a switch is connected, its NC contact will read LOW
   - This eliminates the need to hardcode pedal configuration
 - Two foot switches can be connected:
-  - Left pedal: NO on GPIO1, NC on GPIO35
-  - Right pedal: NO on GPIO2, NC on GPIO36
+  - Left pedal: NO on GPIO2, NC on GPIO35
+  - Right pedal: NO on GPIO1, NC on GPIO36
 - Battery monitoring pins (GPIO3, GPIO4) are available
 - **LED Control**: APA102-2020 LED is fully implemented with status indicators:
   - **Blinking Blue**: Searching for receiver (pairing mode)

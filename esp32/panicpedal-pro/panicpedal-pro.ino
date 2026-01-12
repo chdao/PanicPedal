@@ -23,8 +23,8 @@
 // ============================================================================
 
 // GPIO Pin Definitions (PanicPedal Pro - ESP32-S3-WROOM)
-#define PEDAL_LEFT_NO_PIN 1    // Left pedal switch NO (normally open)
-#define PEDAL_RIGHT_NO_PIN 2   // Right pedal switch NO (normally open)
+#define PEDAL_LEFT_NO_PIN 2    // Left pedal switch NO (normally open)
+#define PEDAL_RIGHT_NO_PIN 1   // Right pedal switch NO (normally open)
 #define BATTERY_VOLTAGE_PIN 3  // Battery voltage sensing (before TLV75733PDBV)
 #define BATTERY_STAT1_PIN 4    // STAT1/LBO from MCP73871 (charging status)
 #define SWITCH_POS1_PIN 5      // Single pole double throw switch position 1
