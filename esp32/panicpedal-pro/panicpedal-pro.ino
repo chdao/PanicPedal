@@ -278,6 +278,12 @@ void setup() {
   pairingState_init(&pairingState);
   pedalReader_init(&pedalReader, PEDAL_LEFT_NO_PIN, PEDAL_RIGHT_NO_PIN, detectedMode);
   
+  // Attach interrupts for event-driven pedal detection
+  attachInterrupt(digitalPinToInterrupt(PEDAL_LEFT_NO_PIN), pedal1ISR, CHANGE);
+  if (detectedMode == PEDAL_MODE_DUAL) {
+    attachInterrupt(digitalPinToInterrupt(PEDAL_RIGHT_NO_PIN), pedal2ISR, CHANGE);
+  }
+  
   // Initialize infrastructure layer
   espNowTransport_init(&transport);
   ledService_init(&ledService, LED_DIN_PIN, LED_CLK_PIN);
