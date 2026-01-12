@@ -52,6 +52,8 @@ libraries/
 
 # PCB manufacturing files
 kicad-pcb/PCBWAY/
+kicad-pcb/JLCPCB/
+kicad-pcb/production/
 *.gbr
 *.gbrjob
 
