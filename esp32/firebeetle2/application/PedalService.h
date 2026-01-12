@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "../domain/PedalReader.h"
+#include "../../shared/domain/PedalReader.h"
 #include "../domain/PairingState.h"
 #include "../infrastructure/EspNowTransport.h"
 #include "../shared/messages.h"
