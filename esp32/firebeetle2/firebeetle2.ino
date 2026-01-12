@@ -7,6 +7,10 @@
 #include "shared/messages.h"
 #include "domain/PairingState.h"
 #include "domain/PedalReader.h"
+
+// Forward declarations for ISR functions
+void IRAM_ATTR pedal1ISR();
+void IRAM_ATTR pedal2ISR();
 #include "infrastructure/EspNowTransport.h"
 #include "application/PairingService.h"
 #include "application/PedalService.h"
@@ -194,6 +198,12 @@ void setup() {
   pairingState_init(&pairingState);
   pedalReader_init(&pedalReader, PEDAL_1_PIN, PEDAL_2_PIN, PEDAL_MODE);
   
+  // Attach interrupts for event-driven pedal detection
+  attachInterrupt(digitalPinToInterrupt(PEDAL_1_PIN), pedal1ISR, CHANGE);
+  if (PEDAL_MODE == 0) {  // DUAL mode
+    attachInterrupt(digitalPinToInterrupt(PEDAL_2_PIN), pedal2ISR, CHANGE);
+  }
+  
   // Initialize infrastructure layer
   espNowTransport_init(&transport);
   
@@ -233,7 +243,8 @@ void loop() {
     goToDeepSleep();
   }
   
-  // Update pedal service (handles pedal reading and events)
+  // Update pedal service only when interrupts occur or debouncing needs checking
+  // This eliminates unnecessary polling - pedalService_update() checks internally
   pedalService_update(&pedalService);
   
   // Battery optimization: Variable delay based on pairing status
