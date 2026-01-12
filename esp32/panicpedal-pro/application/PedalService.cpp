@@ -1,14 +1,17 @@
 #include "PedalService.h"
 #include "../application/PairingService.h"
 #include "../infrastructure/LEDService.h"
+#include "../../shared/debug_format.h"
 #include <string.h>
 #include <stdarg.h>
 #include <Arduino.h>
+#include <WiFi.h>
 #include "../shared/messages.h"
 
 // Forward declaration - debugPrint is defined in transmitter.ino
 extern void debugPrint(const char* format, ...);
 extern bool debugEnabled;
+extern unsigned long bootTime;
 
 static PedalService* g_pedalService = nullptr;
 static PairingService* g_pairingService = nullptr;
@@ -25,13 +28,9 @@ void pedalService_setLEDService(void* ledService) {
 void onPedalPress(char key) {
   if (!g_pedalService) return;
   
-  // Log pedal press
+  // Log pedal press with standardized format (T0: 'key' ▼)
   if (debugEnabled) {
-    if (pairingState_isPaired(g_pedalService->pairingState)) {
-      debugPrint("Pedal %c PRESSED\n", key);
-    } else {
-      debugPrint("Pedal %c PRESSED (not paired)\n", key);
-    }
+    debugPrint("T0: '%c' ▼", key);
   }
   
   // If not paired and we have a discovered receiver, initiate pairing
@@ -63,13 +62,9 @@ void onPedalPress(char key) {
 void onPedalRelease(char key) {
   if (!g_pedalService) return;
   
-  // Log pedal release
+  // Log pedal release with standardized format (T0: 'key' ▲)
   if (debugEnabled) {
-    if (pairingState_isPaired(g_pedalService->pairingState)) {
-      debugPrint("Pedal %c RELEASED\n", key);
-    } else {
-      debugPrint("Pedal %c RELEASED (not paired)\n", key);
-    }
+    debugPrint("T0: '%c' ▲", key);
   }
   
   // Send pedal event if paired

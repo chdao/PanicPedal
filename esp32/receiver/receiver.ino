@@ -99,8 +99,9 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         } else {
           keyToPress = transmitterManager_getAssignedKey(&transmitterManager, transmitterIndex);
         }
-        debugMonitor_print(&debugMonitor, "Pedal event: transmitter %d, key '%c' %s", 
-                          transmitterIndex, keyToPress, msg->pressed ? "PRESSED" : "RELEASED");
+        // Use standardized pedal event format: T%d: '%c' ▼/▲
+        debugMonitor_print(&debugMonitor, "T%d: '%c' %s", 
+                          transmitterIndex, keyToPress, msg->pressed ? "▼" : "▲");
       }
       keyboardService_handlePedalEvent(&keyboardService, senderMAC, msg);
       break;
@@ -178,6 +179,7 @@ void loop() {
 #include "infrastructure/EspNowTransport.cpp"
 #include "infrastructure/Persistence.cpp"
 #include "infrastructure/LEDService.cpp"
+#include "shared/debug_format.cpp"
 #include "infrastructure/DebugMonitor.cpp"
 #include "application/PairingService.cpp"
 #include "application/KeyboardService.cpp"

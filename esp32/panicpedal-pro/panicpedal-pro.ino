@@ -5,6 +5,7 @@
 
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
+#include "shared/debug_format.h"
 #include "domain/PairingState.h"
 #include "shared/domain/PedalReader.h"
 #include "infrastructure/EspNowTransport.h"
@@ -20,6 +21,50 @@
 #define PEDAL_MODE_SINGLE 1    // Force single pedal mode (GPIO1 only)
 #define PEDAL_MODE PEDAL_MODE_AUTO  // Change to PEDAL_MODE_DUAL or PEDAL_MODE_SINGLE to override auto-detection
 #define DEBUG_ENABLED 1  // Set to 0 to disable Serial output and save battery
+// ============================================================================
+
+// Debug system (for debug monitor)
+bool debugEnabled = false;  // Runtime debug flag (can be toggled)
+EspNowTransport* g_debugTransport = nullptr;  // Set in setup()
+
+void debugPrint(const char* format, ...) {
+  if (!debugEnabled) return;
+  
+  // Get transmitter MAC address
+  uint8_t transmitterMAC[6];
+  WiFi.macAddress(transmitterMAC);
+  
+  // Format message with standardized format
+  char buffer[250];  // Larger buffer for formatted message
+  va_list args;
+  va_start(args, format);
+  debugFormat_message_va(buffer, sizeof(buffer), transmitterMAC, false, bootTime, format, args);
+  va_end(args);
+  
+  // Output to Serial
+  Serial.print(buffer);
+  if (buffer[strlen(buffer)-1] != '\n') {
+    Serial.println();  // Ensure newline
+  }
+  
+  // Send to debug monitor via ESP-NOW (broadcast so debug monitor can receive directly)
+  if (g_debugTransport) {
+    debug_message debugMsg;
+    debugMsg.msgType = MSG_DEBUG;
+    // Remove trailing newline if present
+    int len = strlen(buffer);
+    if (len > 0 && buffer[len-1] == '\n') {
+      buffer[len-1] = '\0';
+      len--;
+    }
+    strncpy(debugMsg.message, buffer, sizeof(debugMsg.message) - 1);
+    debugMsg.message[sizeof(debugMsg.message) - 1] = '\0';  // Ensure null termination
+    
+    // Broadcast debug message so debug monitor can receive it directly
+    uint8_t broadcastMAC[] = BROADCAST_MAC;
+    espNowTransport_broadcast(g_debugTransport, (uint8_t*)&debugMsg, sizeof(debugMsg));
+  }
+}
 // ============================================================================
 
 // GPIO Pin Definitions (PanicPedal Pro - ESP32-S3-WROOM)
@@ -288,6 +333,10 @@ void setup() {
   espNowTransport_init(&transport);
   ledService_init(&ledService, LED_DIN_PIN, LED_CLK_PIN);
   
+  // Set debug transport for debugPrint
+  g_debugTransport = &transport;
+  debugEnabled = (DEBUG_ENABLED != 0);  // Set runtime debug flag from compile-time flag
+  
   // Add broadcast peer
   uint8_t broadcastMAC[] = BROADCAST_MAC;
   espNowTransport_addPeer(&transport, broadcastMAC, 0);
@@ -359,6 +408,7 @@ void loop() {
 // Include implementation files (Arduino IDE doesn't auto-compile .cpp files in subdirectories)
 #include "domain/PairingState.cpp"
 #include "shared/domain/PedalReader.cpp"
+#include "shared/debug_format.cpp"
 #include "infrastructure/EspNowTransport.cpp"
 #include "infrastructure/LEDService.cpp"
 #include "application/PairingService.cpp"

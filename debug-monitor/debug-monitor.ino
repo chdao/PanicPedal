@@ -43,8 +43,16 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   memcpy(&msg, data, len);
   
   if (msg.msgType == MSG_DEBUG) {
-    // Print debug message to Serial
-    Serial.print("[DEBUG] ");
+    // Print sender MAC address in standardized format: [MAC]
+    Serial.print("[");
+    for (int i = 0; i < 6; i++) {
+      if (info->src_addr[i] < 0x10) Serial.print("0");
+      Serial.print(info->src_addr[i], HEX);
+      if (i < 5) Serial.print(":");
+    }
+    Serial.print("] ");
+    
+    // Print the debug message (which contains [R/T] [timestamp] message format)
     Serial.println(msg.message);
   }
 }

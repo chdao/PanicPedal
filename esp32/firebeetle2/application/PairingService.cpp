@@ -4,6 +4,12 @@
 #include <Arduino.h>
 #include "../shared/messages.h"
 
+// Forward declarations for utility functions
+bool isValidMAC(const uint8_t* mac);
+bool macEqual(const uint8_t* mac1, const uint8_t* mac2);
+void macCopy(uint8_t* dest, const uint8_t* src);
+int getSlotsNeeded(uint8_t pedalMode);
+
 void pairingService_init(PairingService* service, PairingState* state, EspNowTransport* transport, uint8_t pedalMode, unsigned long bootTime) {
   service->pairingState = state;
   service->transport = transport;
@@ -144,4 +150,45 @@ void pairingService_broadcastPaired(PairingService* service, const uint8_t* rece
   espNowTransport_broadcast(service->transport, (uint8_t*)&pairedMsg, sizeof(pairedMsg));
 }
 
+bool pairingService_checkDiscoveryTimeout(PairingService* service, unsigned long currentTime) {
+  if (!service->pairingState->waitingForDiscoveryResponse) {
+    return false;  // Not waiting
+  }
+  
+  if (currentTime - service->pairingState->discoveryRequestTime > 5000) {  // 5 second timeout
+    service->pairingState->waitingForDiscoveryResponse = false;
+    service->pairingState->discoveryRequestTime = 0;
+    return true;  // Timeout occurred
+  }
+  
+  return false;  // Still waiting
+}
+
+// Utility functions
+bool isValidMAC(const uint8_t* mac) {
+  if (!mac) return false;
+  // Check if MAC is not all zeros and not all 0xFF
+  bool allZero = true;
+  bool allFF = true;
+  for (int i = 0; i < 6; i++) {
+    if (mac[i] != 0) allZero = false;
+    if (mac[i] != 0xFF) allFF = false;
+  }
+  return !allZero && !allFF;
+}
+
+bool macEqual(const uint8_t* mac1, const uint8_t* mac2) {
+  if (!mac1 || !mac2) return false;
+  return memcmp(mac1, mac2, 6) == 0;
+}
+
+void macCopy(uint8_t* dest, const uint8_t* src) {
+  if (dest && src) {
+    memcpy(dest, src, 6);
+  }
+}
+
+int getSlotsNeeded(uint8_t pedalMode) {
+  return (pedalMode == 0) ? 2 : 1;  // 0=DUAL needs 2 slots, 1=SINGLE needs 1 slot
+}
 
