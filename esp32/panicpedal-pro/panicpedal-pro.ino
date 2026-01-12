@@ -328,7 +328,8 @@ void loop() {
     goToDeepSleep();
   }
   
-  // Update pedal service (handles pedal reading and events)
+  // Update pedal service only when interrupts occur or debouncing needs checking
+  // This eliminates unnecessary polling - pedalService_update() checks internally
   pedalService_update(&pedalService);
   
   // Check charging status and update LED accordingly

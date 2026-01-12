@@ -8,6 +8,7 @@
 
 typedef struct {
   bool lastState;
+  volatile bool newState;  // State read in ISR when interrupt occurs
   unsigned long debounceTime;
   bool debouncing;
   volatile bool interruptFlag;  // Set by ISR when interrupt occurs
@@ -29,7 +30,7 @@ void IRAM_ATTR pedal1ISR();
 void IRAM_ATTR pedal2ISR();
 
 void pedalReader_init(PedalReader* reader, uint8_t pedal1Pin, uint8_t pedal2Pin, uint8_t pedalMode);
-bool pedalReader_processInterrupt(PedalReader* reader, uint8_t pin, PedalState* state);
+bool pedalReader_needsUpdate(PedalReader* reader);  // Returns true if interrupt occurred or debouncing needs check
 void pedalReader_update(PedalReader* reader, void (*onPedalPress)(char key), void (*onPedalRelease)(char key));
 
 #endif // PEDAL_READER_H
