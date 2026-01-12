@@ -60,11 +60,47 @@
       ],
       "drc_exclusions": [
         [
+          "annular_width|145000000|110000000|fa021ce0-91d3-4b32-bc2f-b8324b2fdb96|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "annular_width|147000000|110000000|1a1ebe32-fc17-477e-a52e-9d965a8e346b|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "annular_width|149000000|110000000|a99555cb-dada-4a56-b6ec-ebf013f9a31f|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "annular_width|158000000|110050000|688e6640-8357-4c5b-b9b9-e93bdf57bf82|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "annular_width|160000000|110050000|ea4e4eaf-3793-4f8f-96aa-e61bedf6cb89|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "annular_width|162000000|110050000|0ff7a697-3f31-4402-aed4-e868931414cf|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
           "lib_footprint_mismatch|139931084|91484269|d509d04e-9476-425b-9767-50a34c5dd74b|00000000-0000-0000-0000-000000000000",
           ""
         ],
         [
           "lib_footprint_mismatch|243510000|101600000|4d0db4a1-6a15-4c46-a5cf-d40516fdde0a|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "silk_overlap|130261904|100454819|86d420eb-4eb7-459d-b788-c3a7927e0888|f56187ff-1270-4ee5-9869-8f7f2dd0a097",
+          ""
+        ],
+        [
+          "silk_overlap|133785714|106954819|fbf9e633-078c-4d84-be74-322f096c4566|28ed43fe-01fa-44f9-b55e-8e28ccac6af3",
+          ""
+        ],
+        [
+          "silk_overlap|148450000|99235000|7a088117-2370-4853-a4dd-ba50abe04acc|9e4a75f5-254d-47ba-b8eb-a1ecd29e1bf0",
           ""
         ]
       ],
@@ -150,7 +186,7 @@
         "min_via_diameter": 0.5,
         "solder_mask_clearance": 0.0,
         "solder_mask_min_width": 0.0,
-        "solder_mask_to_copper_clearance": 0.0,
+        "solder_mask_to_copper_clearance": 0.005,
         "use_height_for_length_calcs": true
       },
       "teardrop_options": [
@@ -256,11 +292,27 @@
   "erc": {
     "erc_exclusions": [
       [
+        "power_pin_not_driven|1104900|1625600|357e3ab1-1c62-4dc8-afdf-9ad4f1a8ace1|00000000-0000-0000-0000-000000000000|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|",
+        ""
+      ],
+      [
+        "power_pin_not_driven|1244600|723900|333782b5-4a3a-47d4-b37d-c384a9be2243|00000000-0000-0000-0000-000000000000|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|",
+        ""
+      ],
+      [
         "power_pin_not_driven|1828800|927100|33bf9a53-da27-426a-b401-a8bab94b1111|00000000-0000-0000-0000-000000000000|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|",
         ""
       ],
       [
+        "power_pin_not_driven|1955800|965200|33bf9a53-da27-426a-b401-a8bab94b1111|00000000-0000-0000-0000-000000000000|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|",
+        ""
+      ],
+      [
         "power_pin_not_driven|1981200|1397000|357e3ab1-1c62-4dc8-afdf-9ad4f1a8ace1|00000000-0000-0000-0000-000000000000|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|",
+        ""
+      ],
+      [
+        "power_pin_not_driven|266700|1333500|9a55ad85-99f2-4113-84fd-b48a6b30b67c|00000000-0000-0000-0000-000000000000|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|/5d5a7a5a-7a5a-4a5a-8a5a-5a5a5a5a5a5a|",
         ""
       ],
       [
@@ -530,7 +582,7 @@
       "idf": "",
       "netlist": "",
       "plot": "PCBWAY",
-      "pos_files": "",
+      "pos_files": "JLCPCB/",
       "specctra_dsn": "esp32-pedal-pcb.dsn",
       "step": "",
       "svg": "",
@@ -685,6 +737,36 @@
           "group_by": false,
           "label": "Package",
           "name": "Package",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MAXIMUM_PACKAGE_HEIGHT",
+          "name": "MAXIMUM_PACKAGE_HEIGHT",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "STANDARD",
+          "name": "STANDARD",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "SNAPEDA_PN",
+          "name": "SNAPEDA_PN",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "PARTREV",
+          "name": "PARTREV",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MANUFACTURER",
+          "name": "MANUFACTURER",
           "show": false
         }
       ],
