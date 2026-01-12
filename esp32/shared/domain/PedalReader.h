@@ -34,4 +34,3 @@ bool pedalReader_needsUpdate(PedalReader* reader);  // Returns true if interrupt
 void pedalReader_update(PedalReader* reader, void (*onPedalPress)(char key), void (*onPedalRelease)(char key));
 
 #endif // PEDAL_READER_H
-

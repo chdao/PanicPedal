@@ -120,4 +120,3 @@ void pedalReader_update(PedalReader* reader, void (*onPedalPress)(char key), voi
     pedalReader_processPedal(reader, reader->pedal2Pin, &reader->pedal2State, '2', onPedalPress, onPedalRelease);
   }
 }
-

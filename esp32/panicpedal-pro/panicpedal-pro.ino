@@ -6,7 +6,7 @@
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
 #include "domain/PairingState.h"
-#include "domain/PedalReader.h"
+#include "shared/domain/PedalReader.h"
 #include "infrastructure/EspNowTransport.h"
 #include "infrastructure/LEDService.h"
 #include "application/PairingService.h"
@@ -358,7 +358,7 @@ void loop() {
 
 // Include implementation files (Arduino IDE doesn't auto-compile .cpp files in subdirectories)
 #include "domain/PairingState.cpp"
-#include "domain/PedalReader.cpp"
+#include "shared/domain/PedalReader.cpp"
 #include "infrastructure/EspNowTransport.cpp"
 #include "infrastructure/LEDService.cpp"
 #include "application/PairingService.cpp"
