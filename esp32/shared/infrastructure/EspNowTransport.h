@@ -18,4 +18,3 @@ void espNowTransport_registerReceiveCallback(EspNowTransport* transport, Message
 void espNowTransport_broadcast(EspNowTransport* transport, const uint8_t* data, int len);
 
 #endif // ESPNOW_TRANSPORT_H
-

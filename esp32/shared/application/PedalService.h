@@ -3,10 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "../shared/domain/PedalReader.h"
+#include "../domain/PedalReader.h"
 #include "../domain/PairingState.h"
 #include "../infrastructure/EspNowTransport.h"
-#include "../shared/messages.h"
+#include "../messages.h"
 #include "PairingService.h"
 
 typedef struct {
@@ -20,8 +20,12 @@ typedef struct {
 void pedalService_init(PedalService* service, PedalReader* reader, PairingState* pairingState, 
                        EspNowTransport* transport, unsigned long* lastActivityTime);
 void pedalService_setPairingService(PairingService* pairingService);
-void pedalService_update(PedalService* service);
+bool pedalService_update(PedalService* service);  // Returns true if work was done (debouncing, etc.)
 void pedalService_sendPedalEvent(PedalService* service, char key, bool pressed);
 
-#endif // PEDAL_SERVICE_H
+// Optional LED service support (only available if LEDService.h exists in project)
+#ifdef PEDAL_SERVICE_HAS_LED
+void pedalService_setLEDService(void* ledService);
+#endif
 
+#endif // PEDAL_SERVICE_H

@@ -30,7 +30,8 @@ void persistence_save(TransmitterManager* manager) {
 void persistence_load(TransmitterManager* manager) {
   preferences.begin("pedal", true);
   manager->count = preferences.getInt("pairedCount", 0);
-  manager->slotsUsed = preferences.getInt("pedalSlotsUsed", 0);
+  // Don't restore slotsUsed - it will be calculated based on responsive transmitters
+  manager->slotsUsed = 0;
   
   for (int i = 0; i < manager->count && i < MAX_PEDAL_SLOTS; i++) {
     char macKey[12];
@@ -44,7 +45,7 @@ void persistence_load(TransmitterManager* manager) {
       manager->transmitters[i].mac[j] = preferences.getUChar(key, 0);
     }
     manager->transmitters[i].pedalMode = preferences.getUChar(modeKey, 0);
-    manager->transmitters[i].seenOnBoot = false;
+    manager->transmitters[i].seenOnBoot = false;  // Will be set to true when transmitter responds
     manager->transmitters[i].lastSeen = 0;
   }
   

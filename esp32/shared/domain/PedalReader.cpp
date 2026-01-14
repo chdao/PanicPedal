@@ -4,21 +4,45 @@
 // Global pointer to PedalReader instance (needed for ISR)
 PedalReader* g_pedalReader = nullptr;
 
-// Interrupt Service Routines - read GPIO state immediately in ISR
+// Debounce time in milliseconds (ignore interrupts that occur within this time)
+#define DEBOUNCE_TIME_MS 50
+
+// Interrupt Service Routines - set flag only, read GPIO in main loop to avoid watchdog timeout
+// digitalRead() can be slow in ISRs and cause watchdog issues
+// Note: We don't debounce in ISR to keep it fast - debouncing happens in main loop
+// CRITICAL: These ISRs must be extremely fast - any delay can cause watchdog timeout
+// CRITICAL: micros() and other time functions are too slow for ISRs - use simple flag check only
+// CRITICAL: CHANGE mode fires on both edges - we only process actual state changes in main loop
 void IRAM_ATTR pedal1ISR() {
-  if (g_pedalReader) {
-    // Read GPIO state once in ISR - no need to read again later
-    g_pedalReader->pedal1State.newState = digitalRead(g_pedalReader->pedal1Pin);
-    g_pedalReader->pedal1State.interruptFlag = true;
+  // Ultra-minimal ISR - just set flag if not already set
+  // No time calculations, no function calls, no GPIO reads - just a simple flag check and set
+  // The main loop will read GPIO and only process if state actually changed
+  // This prevents noise while pedal is held from causing watchdog timeouts
+  if (g_pedalReader != nullptr) {
+    // Use volatile pointer to ensure compiler doesn't optimize away the check
+    volatile bool* flag = &g_pedalReader->pedal1State.interruptFlag;
+    if (!*flag) {
+      *flag = true;
+    }
   }
+  // If flag already set, ignore this interrupt - main loop will process it eventually
+  // This prevents ISR from being called repeatedly while main loop is processing
 }
 
 void IRAM_ATTR pedal2ISR() {
-  if (g_pedalReader) {
-    // Read GPIO state once in ISR - no need to read again later
-    g_pedalReader->pedal2State.newState = digitalRead(g_pedalReader->pedal2Pin);
-    g_pedalReader->pedal2State.interruptFlag = true;
+  // Ultra-minimal ISR - just set flag if not already set
+  // No time calculations, no function calls, no GPIO reads - just a simple flag check and set
+  // The main loop will read GPIO and only process if state actually changed
+  // This prevents noise while pedal is held from causing watchdog timeouts
+  if (g_pedalReader != nullptr) {
+    // Use volatile pointer to ensure compiler doesn't optimize away the check
+    volatile bool* flag = &g_pedalReader->pedal2State.interruptFlag;
+    if (!*flag) {
+      *flag = true;
+    }
   }
+  // If flag already set, ignore this interrupt - main loop will process it eventually
+  // This prevents ISR from being called repeatedly while main loop is processing
 }
 
 void pedalReader_init(PedalReader* reader, uint8_t pedal1Pin, uint8_t pedal2Pin, uint8_t pedalMode) {
@@ -26,15 +50,13 @@ void pedalReader_init(PedalReader* reader, uint8_t pedal1Pin, uint8_t pedal2Pin,
   reader->pedal2Pin = pedal2Pin;
   reader->pedalMode = pedalMode;
   reader->pedal1State.lastState = HIGH;
-  reader->pedal1State.newState = HIGH;
-  reader->pedal1State.debounceTime = 0;
-  reader->pedal1State.debouncing = false;
   reader->pedal1State.interruptFlag = false;
+  reader->pedal1State.lastDebounceTime = 0;
+  reader->interruptAttached1 = false;  // Will be set when interrupt is attached
   reader->pedal2State.lastState = HIGH;
-  reader->pedal2State.newState = HIGH;
-  reader->pedal2State.debounceTime = 0;
-  reader->pedal2State.debouncing = false;
   reader->pedal2State.interruptFlag = false;
+  reader->pedal2State.lastDebounceTime = 0;
+  reader->interruptAttached2 = false;  // Will be set when interrupt is attached
   
   // Set global pointer for ISR access
   g_pedalReader = reader;
@@ -53,70 +75,67 @@ void pedalReader_init(PedalReader* reader, uint8_t pedal1Pin, uint8_t pedal2Pin,
 }
 
 bool pedalReader_needsUpdate(PedalReader* reader) {
-  // Need to update if:
-  // 1. Interrupt flag is set (new interrupt occurred)
-  // 2. Debouncing is in progress and debounce time may have elapsed
-  if (reader->pedal1State.interruptFlag || reader->pedal1State.debouncing) {
+  // Need to update if interrupt flag is set (new interrupt occurred)
+  if (reader->pedal1State.interruptFlag) {
     return true;
   }
-  if (reader->pedalMode == 0 && (reader->pedal2State.interruptFlag || reader->pedal2State.debouncing)) {
+  if (reader->pedalMode == 0 && reader->pedal2State.interruptFlag) {
     return true;
   }
   return false;
 }
 
 void pedalReader_processPedal(PedalReader* reader, uint8_t pin, PedalState* state, char key, 
-                               void (*onPedalPress)(char), void (*onPedalRelease)(char)) {
-  unsigned long currentTime = millis();
-  bool stateChanged = false;
-  
+                               void (*onPedalPress)(char), void (*onPedalRelease)(char),
+                               bool* interruptAttached) {
   if (state->interruptFlag) {
-    // New interrupt occurred - use state read in ISR
+    // Clear flag immediately
     state->interruptFlag = false;
-    bool currentState = state->newState;
+    
+    // Read GPIO state now (not in ISR to avoid watchdog timeout)
+    bool currentState = digitalRead(pin);
+    unsigned long currentTime = millis();
+    
+    // Only process if state actually changed (prevents processing noise as events)
+    bool stateChanged = (currentState != state->lastState);
+    
+    if (!stateChanged) {
+      // State didn't change - this is noise, ignore it
+      return;
+    }
+    
+    // State changed - check debounce time
+    if (currentTime - state->lastDebounceTime < DEBOUNCE_TIME_MS) {
+      // Too soon since last state change - likely bounce, ignore it
+      return;
+    }
+    
+    // Valid state change after debounce - process the transition
+    state->lastDebounceTime = currentTime;
     
     if (currentState == LOW && state->lastState == HIGH) {
-      // Transition from HIGH to LOW (pedal pressed) - start debouncing
-      state->debounceTime = currentTime;
-      state->debouncing = true;
+      // Transition from HIGH to LOW (pedal pressed)
+      state->lastState = LOW;
+      if (onPedalPress) onPedalPress(key);
     } else if (currentState == HIGH && state->lastState == LOW) {
-      // Transition from LOW to HIGH (pedal released) - immediate, no debounce needed
+      // Transition from LOW to HIGH (pedal released)
       state->lastState = HIGH;
-      state->debouncing = false;
-      stateChanged = true;
       if (onPedalRelease) onPedalRelease(key);
-    } else if (currentState == HIGH && state->debouncing) {
-      // Bounce detected during press - cancel debounce
-      state->debouncing = false;
-    }
-  } else if (state->debouncing) {
-    // Check if debounce time has elapsed
-    if (currentTime - state->debounceTime >= DEBOUNCE_DELAY) {
-      // Debounce time elapsed - verify state is still LOW (one final read)
-      if (digitalRead(pin) == LOW) {
-        state->lastState = LOW;
-        state->debouncing = false;
-        stateChanged = true;
-        if (onPedalPress) onPedalPress(key);
-      } else {
-        // State changed back to HIGH - bounce, cancel
-        state->debouncing = false;
-      }
     }
   }
 }
 
 void pedalReader_update(PedalReader* reader, void (*onPedalPress)(char key), void (*onPedalRelease)(char key)) {
-  // Only process if there's work to do (interrupt occurred or debouncing needs check)
+  // Only process if there's work to do (interrupt occurred)
   if (!pedalReader_needsUpdate(reader)) {
     return;  // No work needed - exit immediately
   }
   
   // Process pedal 1
-  pedalReader_processPedal(reader, reader->pedal1Pin, &reader->pedal1State, '1', onPedalPress, onPedalRelease);
+  pedalReader_processPedal(reader, reader->pedal1Pin, &reader->pedal1State, '1', onPedalPress, onPedalRelease, &reader->interruptAttached1);
   
   // Process pedal 2 (only in DUAL mode)
   if (reader->pedalMode == 0) {
-    pedalReader_processPedal(reader, reader->pedal2Pin, &reader->pedal2State, '2', onPedalPress, onPedalRelease);
+    pedalReader_processPedal(reader, reader->pedal2Pin, &reader->pedal2State, '2', onPedalPress, onPedalRelease, &reader->interruptAttached2);
   }
 }

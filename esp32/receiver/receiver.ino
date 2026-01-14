@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <esp_now.h>
+#include <stdarg.h>
 
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
@@ -26,6 +27,16 @@ unsigned long bootTime = 0;
 
 // Forward declaration
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel);
+
+// Wrapper function for debug callback
+void pairingServiceDebugCallback(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  char buffer[256];
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  debugMonitor_print(&debugMonitor, "%s", buffer);
+}
 
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel) {
   if (len < 1) return;
@@ -92,7 +103,23 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     
     case MSG_PEDAL_EVENT: {
       int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
-      if (transmitterIndex >= 0) {
+      
+      // If transmitter is unknown and we're in grace period, request discovery
+      if (transmitterIndex < 0) {
+        unsigned long currentTime = millis();
+        unsigned long timeSinceBoot = currentTime - bootTime;
+        bool inGracePeriod = (timeSinceBoot < TRANSMITTER_TIMEOUT);
+        
+        if (inGracePeriod && !pairingService.gracePeriodSkipped) {
+          // Unknown transmitter sending pedal events during grace period - request discovery
+          receiverEspNowTransport_addPeer(&transport, senderMAC, channel);
+          struct_message alive = {MSG_ALIVE, 0, false, 0};
+          receiverEspNowTransport_send(&transport, senderMAC, (uint8_t*)&alive, sizeof(alive));
+          
+          debugMonitor_print(&debugMonitor, "Unknown transmitter sent pedal event during grace period - requesting discovery");
+        }
+      } else {
+        // Known transmitter - handle pedal event normally
         char keyToPress;
         if (transmitterManager.transmitters[transmitterIndex].pedalMode == 0) {
           keyToPress = (msg->key == '1') ? 'l' : 'r';
@@ -103,6 +130,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         debugMonitor_print(&debugMonitor, "T%d: '%c' %s", 
                           transmitterIndex, keyToPress, msg->pressed ? "▼" : "▲");
       }
+      
       keyboardService_handlePedalEvent(&keyboardService, senderMAC, msg);
       break;
     }
@@ -133,6 +161,7 @@ void setup() {
   
   // Initialize application layer
   receiverPairingService_init(&pairingService, &transmitterManager, &transport, bootTime);
+  receiverPairingService_setDebugCallback(&pairingService, pairingServiceDebugCallback);
   keyboardService_init(&keyboardService, &transmitterManager);
   
   // Register message callback (must be before adding peers)
@@ -156,8 +185,14 @@ void setup() {
     // Send debug messages now that ESP-NOW is fully initialized
     debugMonitor_print(&debugMonitor, "ESP-NOW initialized");
     debugMonitor_print(&debugMonitor, "Loaded %d transmitter(s) from EEPROM", transmitterManager.count);
-    debugMonitor_print(&debugMonitor, "Pedal slots used: %d/%d", transmitterManager.slotsUsed, MAX_PEDAL_SLOTS);
+    // Show slots used based on responsive transmitters only (not stored slotsUsed)
+    int responsiveSlots = transmitterManager_calculateSlotsUsed(&transmitterManager);
+    debugMonitor_print(&debugMonitor, "Pedal slots used: %d/%d (responsive transmitters only)", responsiveSlots, MAX_PEDAL_SLOTS);
   }
+  
+  // Ping known transmitters immediately on boot (before pairing/grace period)
+  // This restores previous pairings if transmitters are still online
+  receiverPairingService_pingKnownTransmittersOnBoot(&pairingService);
   
   debugMonitor_print(&debugMonitor, "=== Receiver Ready ===");
 }
@@ -168,8 +203,9 @@ void loop() {
   // Update pairing service (handles beacons, pings, replacement logic)
   receiverPairingService_update(&pairingService, currentTime);
   
-  // Update LED status
-  ledService_update(&ledService, currentTime);
+  // Update LED status - turn off immediately when grace period ends or slots are full
+  int slotsUsed = transmitterManager_calculateSlotsUsed(&transmitterManager);
+  ledService_update(&ledService, currentTime, pairingService.gracePeriodCheckDone, slotsUsed);
   
   delay(10);
 }

@@ -10,6 +10,10 @@
 #define BEACON_INTERVAL 2000
 #define TRANSMITTER_TIMEOUT 30000  // 30 seconds
 #define ALIVE_RESPONSE_TIMEOUT 2000  // 2 seconds
+#define INITIAL_PING_WAIT 1000  // 1 second wait after initial ping before starting grace period
+
+// Forward declaration for debug callback
+typedef void (*DebugCallback)(const char* format, ...);
 
 typedef struct {
   TransmitterManager* manager;
@@ -17,6 +21,10 @@ typedef struct {
   unsigned long bootTime;
   unsigned long lastBeaconTime;
   bool gracePeriodCheckDone;
+  bool initialPingSent;  // Track if initial ping to known transmitters has been sent
+  bool gracePeriodSkipped;  // Track if grace period was skipped because slots are full
+  bool slotReassignmentDone;  // Track if slot reassignment check has been performed
+  DebugCallback debugCallback;  // Callback for debug messages
   
   // Transmitter replacement mechanism
   uint8_t pendingNewTransmitterMAC[6];
@@ -27,6 +35,7 @@ typedef struct {
 
 void receiverPairingService_init(ReceiverPairingService* service, TransmitterManager* manager, 
                                   ReceiverEspNowTransport* transport, unsigned long bootTime);
+void receiverPairingService_setDebugCallback(ReceiverPairingService* service, DebugCallback callback);
 void receiverPairingService_handleDiscoveryRequest(ReceiverPairingService* service, const uint8_t* txMAC, 
                                                     uint8_t pedalMode, uint8_t channel, unsigned long currentTime);
 void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* service, const uint8_t* txMAC, 
@@ -35,7 +44,8 @@ void receiverPairingService_handleTransmitterPaired(ReceiverPairingService* serv
                                                      const transmitter_paired_message* msg);
 void receiverPairingService_handleAlive(ReceiverPairingService* service, const uint8_t* txMAC);
 void receiverPairingService_sendBeacon(ReceiverPairingService* service);
-void receiverPairingService_pingKnownTransmitters(ReceiverPairingService* service);
+void receiverPairingService_pingKnownTransmittersOnBoot(ReceiverPairingService* service);  // Immediate ping on boot
+void receiverPairingService_pingKnownTransmitters(ReceiverPairingService* service);  // Periodic ping during grace period
 void receiverPairingService_update(ReceiverPairingService* service, unsigned long currentTime);
 
 #endif // RECEIVER_PAIRING_SERVICE_H

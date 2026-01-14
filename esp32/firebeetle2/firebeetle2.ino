@@ -8,16 +8,16 @@
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
 #include "shared/debug_format.h"
-#include "domain/PairingState.h"
+#include "shared/domain/PairingState.h"
 #include "shared/domain/PedalReader.h"
 
 // Forward declarations for ISR functions
 void IRAM_ATTR pedal1ISR();
 void IRAM_ATTR pedal2ISR();
 void IRAM_ATTR debugToggleISR();
-#include "infrastructure/EspNowTransport.h"
-#include "application/PairingService.h"
-#include "application/PedalService.h"
+#include "shared/infrastructure/EspNowTransport.h"
+#include "shared/application/PairingService.h"
+#include "shared/application/PedalService.h"
 
 // ============================================================================
 // CONFIGURATION
@@ -29,8 +29,8 @@ void IRAM_ATTR debugToggleISR();
 #define PEDAL_1_PIN 13
 #define PEDAL_2_PIN 14
 #define DEBUG_PIN 27  // GPIO 27 (A5) - Ground this pin to enable debug output
-#define INACTIVITY_TIMEOUT 600000  // 10 minutes
-#define IDLE_DELAY_PAIRED 20  // 20ms delay when paired
+#define INACTIVITY_TIMEOUT 300000  // 5 minutes
+#define IDLE_DELAY_PAIRED 50  // 50ms delay when paired (reduced from 20ms since we don't poll GPIO anymore)
 #define IDLE_DELAY_UNPAIRED 200  // 200ms delay when not paired
 
 // Domain layer instances
@@ -56,30 +56,19 @@ void IRAM_ATTR debugToggleISR() {
   debugToggleFlag = true;
 }
 
-// Helper function to send debug message to debug monitor (works even when debugEnabled is false)
+// Use shared utilities for debug/serial output
+#include "shared/infrastructure/TransmitterUtils.h"
+
+// Wrapper functions for convenience (maintains compatibility)
 void sendDebugMessage(const char* formattedMessage) {
-  if (!g_debugTransport) return;
-  
-  debug_message debugMsg;
-  debugMsg.msgType = MSG_DEBUG;
-  
-  // Remove trailing newline if present
-  int len = strlen(formattedMessage);
-  char messageCopy[250];
-  strncpy(messageCopy, formattedMessage, sizeof(messageCopy) - 1);
-  messageCopy[sizeof(messageCopy) - 1] = '\0';
-  
-  if (len > 0 && messageCopy[len-1] == '\n') {
-    messageCopy[len-1] = '\0';
-    len--;
-  }
-  
-  strncpy(debugMsg.message, messageCopy, sizeof(debugMsg.message) - 1);
-  debugMsg.message[sizeof(debugMsg.message) - 1] = '\0';
-  
-  // Broadcast debug message so debug monitor can receive it directly
-  uint8_t broadcastMAC[] = BROADCAST_MAC;
-  espNowTransport_broadcast(g_debugTransport, (uint8_t*)&debugMsg, sizeof(debugMsg));
+  transmitterUtils_sendDebugMessage(formattedMessage);
+}
+
+void serialPrint(const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  transmitterUtils_serialPrint_va(format, args);
+  va_end(args);
 }
 
 void debugPrint(const char* format, ...) {
@@ -98,7 +87,7 @@ void debugPrint(const char* format, ...) {
   
   // Output to Serial
   Serial.print(buffer);
-  if (buffer[strlen(buffer)-1] != '\n') {
+  if (strlen(buffer) > 0 && buffer[strlen(buffer)-1] != '\n') {
     Serial.println();  // Ensure newline
   }
   
@@ -218,13 +207,22 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   if (pairingState_isPaired(&pairingState)) {
     // Already paired - check if message is from our paired receiver
     if (memcmp(senderMAC, pairingState.pairedReceiverMAC, 6) == 0) {
-      // Message from our paired receiver - accept it
-      if (debugEnabled) {
-        Serial.print("[");
-        Serial.print(timeSinceBoot);
-        Serial.print(" ms] Received message from paired receiver (type=");
-        Serial.print(msg->msgType);
-        Serial.println(")");
+      // Message from our paired receiver - handle MSG_ALIVE to send discovery request
+      if (msg->msgType == MSG_ALIVE) {
+        if (debugEnabled) {
+          Serial.print("[");
+          Serial.print(timeSinceBoot);
+          Serial.println(" ms] Received MSG_ALIVE from paired receiver - calling handleAlive");
+        }
+        pairingService_handleAlive(&pairingService, senderMAC, channel);
+      } else {
+        if (debugEnabled) {
+          Serial.print("[");
+          Serial.print(timeSinceBoot);
+          Serial.print(" ms] Received message from paired receiver (type=");
+          Serial.print(msg->msgType);
+          Serial.println(")");
+        }
       }
     } else {
       // Message from different receiver - send DELETE_RECORD
@@ -242,9 +240,22 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   } else {
     // Not paired - handle pairing messages
     if (msg->msgType == MSG_DISCOVERY_RESP) {
+      if (debugEnabled) {
+        Serial.print("[");
+        Serial.print(timeSinceBoot);
+        Serial.println(" ms] Handling MSG_DISCOVERY_RESP from receiver");
+      }
       pairingService_handleDiscoveryResponse(&pairingService, senderMAC, channel);
     } else if (msg->msgType == MSG_ALIVE) {
       pairingService_handleAlive(&pairingService, senderMAC, channel);
+    } else {
+      if (debugEnabled) {
+        Serial.print("[");
+        Serial.print(timeSinceBoot);
+        Serial.print(" ms] Unhandled message type=");
+        Serial.print(msg->msgType);
+        Serial.println(" when not paired");
+      }
     }
   }
 }
@@ -402,6 +413,10 @@ void loop() {
     }
   }
   
+  // Process any pending discovery requests (deferred from ESP-NOW callback)
+  // This must be done in main loop, not in callback context
+  pairingService_processPendingDiscovery(&pairingService);
+  
   // Check discovery timeout
   if (pairingService_checkDiscoveryTimeout(&pairingService, currentTime)) {
     if (debugEnabled) {
@@ -416,20 +431,27 @@ void loop() {
   
   // Update pedal service only when interrupts occur or debouncing needs checking
   // This eliminates unnecessary polling - pedalService_update() checks internally
-  pedalService_update(&pedalService);
+  bool hasWork = pedalService_update(&pedalService);
   
-  // Battery optimization: Variable delay based on pairing status
-  if (pairingState_isPaired(&pairingState)) {
-    delay(IDLE_DELAY_PAIRED);
+  // Battery optimization: Use shorter delay when debouncing (needs frequent checks)
+  // or longer delay when idle (nothing to do)
+  if (hasWork) {
+    // Debouncing in progress - check frequently
+    delay(20);
+  } else if (pairingState_isPaired(&pairingState)) {
+    // Paired and idle - can sleep longer
+    delay(100);
   } else {
+    // Unpaired and idle - even longer delay
     delay(IDLE_DELAY_UNPAIRED);
   }
 }
 
 // Include implementation files (Arduino IDE doesn't auto-compile .cpp files in subdirectories)
-#include "domain/PairingState.cpp"
+#include "shared/domain/PairingState.cpp"
 #include "shared/domain/PedalReader.cpp"
 #include "shared/debug_format.cpp"
-#include "infrastructure/EspNowTransport.cpp"
-#include "application/PairingService.cpp"
-#include "application/PedalService.cpp"
+#include "shared/infrastructure/EspNowTransport.cpp"
+#include "shared/infrastructure/TransmitterUtils.cpp"
+#include "shared/application/PairingService.cpp"
+#include "shared/application/PedalService.cpp"

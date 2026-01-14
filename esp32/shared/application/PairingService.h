@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "../messages.h"
 #include "../domain/PairingState.h"
 #include "../infrastructure/EspNowTransport.h"
-#include "../shared/messages.h"
 
 typedef struct {
   PairingState* pairingState;
@@ -13,6 +13,10 @@ typedef struct {
   uint8_t pedalMode;  // 0=DUAL, 1=SINGLE
   unsigned long bootTime;
   void (*onPaired)(const uint8_t* receiverMAC);
+  // Deferred discovery request (to avoid sending from ESP-NOW callback)
+  uint8_t pendingDiscoveryMAC[6];
+  uint8_t pendingDiscoveryChannel;
+  bool hasPendingDiscovery;
 } PairingService;
 
 void pairingService_init(PairingService* service, PairingState* state, EspNowTransport* transport, uint8_t pedalMode, unsigned long bootTime);
@@ -23,6 +27,6 @@ void pairingService_initiatePairing(PairingService* service, const uint8_t* rece
 void pairingService_broadcastOnline(PairingService* service);
 void pairingService_broadcastPaired(PairingService* service, const uint8_t* receiverMAC);
 bool pairingService_checkDiscoveryTimeout(PairingService* service, unsigned long currentTime);
+void pairingService_processPendingDiscovery(PairingService* service);  // Process deferred discovery request from main loop
 
 #endif // PAIRING_SERVICE_H
-

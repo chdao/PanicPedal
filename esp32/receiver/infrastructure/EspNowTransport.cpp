@@ -31,6 +31,14 @@ void receiverEspNowTransport_init(ReceiverEspNowTransport* transport) {
 bool receiverEspNowTransport_send(ReceiverEspNowTransport* transport, const uint8_t* mac, const uint8_t* data, int len) {
   if (!transport->initialized) return false;
   
+  // Ensure peer is added before sending (ESP-NOW requires peer to be added)
+  esp_now_peer_info_t peerInfo;
+  esp_err_t getPeerResult = esp_now_get_peer(mac, &peerInfo);
+  if (getPeerResult != ESP_OK) {
+    // Peer doesn't exist - add it first (use channel 0 = current channel)
+    receiverEspNowTransport_addPeer(transport, mac, 0);
+  }
+  
   esp_err_t result = esp_now_send(mac, data, len);
   return (result == ESP_OK);
 }

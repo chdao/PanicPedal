@@ -40,20 +40,33 @@ void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len < sizeof(debug_message)) return;
   
   debug_message msg;
-  memcpy(&msg, data, len);
+  // Ensure message is null-terminated
+  memset(&msg, 0, sizeof(msg));
+  memcpy(&msg, data, len < (int)sizeof(debug_message) ? len : sizeof(debug_message));
+  msg.message[sizeof(msg.message) - 1] = '\0';  // Ensure null termination
   
   if (msg.msgType == MSG_DEBUG) {
     // Print sender MAC address in standardized format: [MAC]
-    Serial.print("[");
-    for (int i = 0; i < 6; i++) {
-      if (info->src_addr[i] < 0x10) Serial.print("0");
-      Serial.print(info->src_addr[i], HEX);
-      if (i < 5) Serial.print(":");
+    // Use a larger buffer and ensure proper formatting
+    char macStr[20];  // Larger buffer to ensure no truncation
+    int macLen = snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                          info->src_addr[0], info->src_addr[1], info->src_addr[2],
+                          info->src_addr[3], info->src_addr[4], info->src_addr[5]);
+    if (macLen > 0 && macLen < (int)sizeof(macStr)) {
+      Serial.print("[");
+      Serial.print(macStr);
+      Serial.print("] ");
+    } else {
+      // Fallback if formatting failed
+      Serial.print("[MAC_ERROR] ");
     }
-    Serial.print("] ");
     
     // Print the debug message (which contains [R/T] [timestamp] message format)
-    Serial.println(msg.message);
+    // Ensure message is properly null-terminated before printing
+    Serial.print(msg.message);
+    Serial.println();  // Explicit newline
+    Serial.flush();    // Ensure output is complete
+    delay(1);          // Small delay to prevent buffer overflow
   }
 }
 
@@ -81,6 +94,8 @@ void startDiscovery() {
 
 void setup() {
   Serial.begin(115200);
+  // Increase Serial buffer size to prevent truncation
+  Serial.setTxBufferSize(1024);
   delay(2000);
   
   Serial.println("========================================");

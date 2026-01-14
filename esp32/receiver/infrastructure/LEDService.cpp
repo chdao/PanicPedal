@@ -11,14 +11,23 @@ void ledService_init(LEDService* service, unsigned long bootTime) {
   pixels.show();
 }
 
-void ledService_update(LEDService* service, unsigned long currentTime) {
+void ledService_update(LEDService* service, unsigned long currentTime, bool gracePeriodDone, int slotsUsed) {
   unsigned long timeSinceBoot = currentTime - service->bootTime;
-  if (timeSinceBoot < TRANSMITTER_TIMEOUT) {
-    // Grace period - set LED to blue
+  
+  // LED should be ON only when:
+  // - Grace period is NOT done
+  // - AND time since boot < timeout
+  // - AND slots are not full
+  bool shouldBeOn = !gracePeriodDone && 
+                    (timeSinceBoot < TRANSMITTER_TIMEOUT) && 
+                    (slotsUsed < MAX_PEDAL_SLOTS);
+  
+  if (shouldBeOn) {
+    // Grace period active and slots available - set LED to blue
     pixels.setPixelColor(0, pixels.Color(0, 0, 255));
     pixels.show();
   } else {
-    // After grace period - turn LED off
+    // After grace period, timeout, or slots full - turn LED off
     pixels.setPixelColor(0, pixels.Color(0, 0, 0));
     pixels.show();
   }
