@@ -1,5 +1,6 @@
 #include "PedalService.h"
 #include "PairingService.h"
+#include "../domain/PedalSlots.h"
 #include "../debug_format.h"
 #include <string.h>
 #include <stdarg.h>
@@ -15,9 +16,6 @@
 extern void debugPrint(const char* format, ...);
 extern bool debugEnabled;
 extern unsigned long bootTime;
-
-// Forward declaration - getSlotsNeeded is defined in PairingService.cpp
-int getSlotsNeeded(uint8_t pedalMode);
 
 static PedalService* g_pedalService = nullptr;
 static PairingService* g_pairingService = nullptr;

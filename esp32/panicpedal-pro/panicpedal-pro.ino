@@ -52,6 +52,12 @@ static void cacheMAC() {
 // This ensures consistency - both outputs receive identical messages
 // Note: debugEnabled flag can be checked before calling this function for conditional logic
 void debugPrint(const char* format, ...) {
+  // Runtime gate: when debug is disabled, do not emit logs to Serial or debug monitor.
+  // This keeps normal operation quiet and reduces the chance of WDT issues from heavy I/O.
+  if (!debugEnabled) {
+    return;
+  }
+
   // Use cached MAC address
   cacheMAC();
   
@@ -62,7 +68,7 @@ void debugPrint(const char* format, ...) {
   debugFormat_message_va(buffer, sizeof(buffer), g_cachedMAC, false, bootTime, format, args);
   va_end(args);
   
-  // Always send to Serial (if DEBUG_ENABLED) - non-blocking write in chunks
+  // Send to Serial (if DEBUG_ENABLED) - non-blocking write in chunks
   if (DEBUG_ENABLED) {
     size_t len = strlen(buffer);
     if (len > 0) {
@@ -81,7 +87,7 @@ void debugPrint(const char* format, ...) {
     }
   }
   
-  // Always send to debug monitor via ESP-NOW (if transport available)
+  // Send to debug monitor via ESP-NOW (if transport available)
   // Same message goes to both Serial and debug monitor for consistency
   if (g_debugTransport) {
     debug_message debugMsg;
@@ -109,12 +115,24 @@ void debugPrint(const char* format, ...) {
 // Legacy wrapper functions for compatibility (now use unified debugPrint)
 // These ensure backward compatibility while using the unified debug function
 void serialPrint(const char* format, ...) {
+  // Always print to Serial (boot/config messages).
+  // For debug monitor output, we only forward when debugEnabled is true via debugPrint().
+  if (!DEBUG_ENABLED) {
+    return;
+  }
+
   va_list args;
   va_start(args, format);
   char buffer[250];
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
-  debugPrint("%s", buffer);
+
+  Serial.println(buffer);
+
+  // Forward same message to debug monitor if enabled (keeps outputs consistent when debugging).
+  if (debugEnabled) {
+    debugPrint("%s", buffer);
+  }
 }
 
 void sendDebugMessage(const char* formattedMessage) {

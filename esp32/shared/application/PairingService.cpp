@@ -3,28 +3,20 @@
 #include <string.h>
 #include <Arduino.h>
 #include "../messages.h"
+#include "../domain/MacUtils.h"
+#include "../domain/PedalSlots.h"
+#include "../infrastructure/TransmitterUtils.h"
 // Note: PairingState.h and EspNowTransport.h must be included before this file
 // They are included by each project's .ino file
-
-// Forward declarations for utility functions
-bool isValidMAC(const uint8_t* mac);
-bool macEqual(const uint8_t* mac1, const uint8_t* mac2);
-void macCopy(uint8_t* dest, const uint8_t* src);
-int getSlotsNeeded(uint8_t pedalMode);
 
 // Forward declaration for debug function (defined in transmitter.ino)
 extern void debugPrint(const char* format, ...);
 extern bool debugEnabled;  // Runtime debug flag (can be checked for conditional logic)
 
-// Helper function to format MAC address (only when debug enabled, power optimized)
 static inline const char* formatMAC(const uint8_t* mac) {
-  static char macStr[18];  // Reuse static buffer to avoid stack allocations
-  if (mac) {
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  } else {
-    macStr[0] = '\0';
-  }
+  // Only use for debug prints; uses a static buffer to keep call sites compact.
+  static char macStr[18];
+  transmitterUtils_formatMAC(macStr, sizeof(macStr), mac);
   return macStr;
 }
 
@@ -50,7 +42,7 @@ void pairingService_handleBeacon(PairingService* service, const uint8_t* senderM
   // Check if this beacon is from a previously paired receiver (matches pairedReceiverMAC)
   // This works even if currently paired (for reconnection) or if pairing was lost
   bool isPreviouslyPaired = macEqual(beacon->receiverMAC, service->pairingState->pairedReceiverMAC) &&
-                            !macEqual(service->pairingState->pairedReceiverMAC, (uint8_t[6]){0,0,0,0,0,0});
+                            !macIsZero(service->pairingState->pairedReceiverMAC);
   
   if (beacon->availableSlots >= slotsNeeded) {
     // Beacons don't include channel info, use 0 (ESP-NOW will use current WiFi channel)
@@ -215,9 +207,9 @@ void pairingService_broadcastOnline(PairingService* service) {
   onlineMsg.msgType = MSG_TRANSMITTER_ONLINE;
   macCopy(onlineMsg.transmitterMAC, transmitterMAC);
   
-  // Debug: Log that we're broadcasting online
-  extern void debugPrint(const char* format, ...);
-  debugPrint("Broadcasting TRANSMITTER_ONLINE message");
+  if (debugEnabled) {
+    debugPrint("Broadcasting TRANSMITTER_ONLINE message");
+  }
   
   espNowTransport_broadcast(service->transport, (uint8_t*)&onlineMsg, sizeof(onlineMsg));
 }
@@ -248,34 +240,6 @@ bool pairingService_checkDiscoveryTimeout(PairingService* service, unsigned long
   return false;  // Still waiting
 }
 
-// Utility functions
-bool isValidMAC(const uint8_t* mac) {
-  if (!mac) return false;
-  // Check if MAC is not all zeros and not all 0xFF
-  bool allZero = true;
-  bool allFF = true;
-  for (int i = 0; i < 6; i++) {
-    if (mac[i] != 0) allZero = false;
-    if (mac[i] != 0xFF) allFF = false;
-  }
-  return !allZero && !allFF;
-}
-
-bool macEqual(const uint8_t* mac1, const uint8_t* mac2) {
-  if (!mac1 || !mac2) return false;
-  return memcmp(mac1, mac2, 6) == 0;
-}
-
-void macCopy(uint8_t* dest, const uint8_t* src) {
-  if (dest && src) {
-    memcpy(dest, src, 6);
-  }
-}
-
-int getSlotsNeeded(uint8_t pedalMode) {
-  return (pedalMode == 0) ? 2 : 1;  // 0=DUAL needs 2 slots, 1=SINGLE needs 1 slot
-}
-
 void pairingService_processPendingDiscovery(PairingService* service) {
   if (!service->hasPendingDiscovery) {
     return;  // No pending discovery request
@@ -284,7 +248,7 @@ void pairingService_processPendingDiscovery(PairingService* service) {
   // Clear the flag first to avoid re-processing
   service->hasPendingDiscovery = false;
   uint8_t receiverMAC[6];
-  uint8_t channel = service->pendingDiscoveryChannel;
+  // Channel is carried for future use; `espNowTransport_send` will add peer with channel 0.
   memcpy(receiverMAC, service->pendingDiscoveryMAC, 6);
   memset(service->pendingDiscoveryMAC, 0, 6);
   
