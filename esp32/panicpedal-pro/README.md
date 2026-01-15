@@ -13,7 +13,7 @@ This directory contains the firmware for the **PanicPedal Pro** transmitter PCB.
 
 | GPIO | Function | Component | Notes |
 |------|----------|-----------|-------|
-| GPIO1 | Pedal Right NO | Right pedal normally-open contact | Interrupt-driven |
+| GPIO1 | Pedal Right NO | Right pedal normally-open contact | Interrupt-driven, deep sleep wakeup |
 | GPIO2 | Pedal Left NO | Left pedal normally-open contact | Interrupt-driven, deep sleep wakeup |
 | GPIO9 | Battery Voltage Sensing | Before TLV75733PDBV regulator | |
 | GPIO4 | STAT1/LBO | MCP73871 battery charger (charging status) | |
@@ -51,7 +51,7 @@ All other GPIOs (GPIO11-18, GPIO21-25, GPIO35-40, GPIO42, GPIO45-48) are automat
   - Detection uses NC contacts (GPIO6 & GPIO7) to sense switch presence
   - No NVS storage - always detects fresh on boot for maximum reliability
 - **Manual Override**: Set `PEDAL_MODE` to `PEDAL_MODE_DUAL` (0) or `PEDAL_MODE_SINGLE` (1) to override auto-detection
-- **Deep Sleep Wakeup**: GPIO2 (LOW trigger) - Left pedal
+- **Deep Sleep Wakeup**: GPIO1 or GPIO2 (LOW trigger) - either pedal
 
 ## Building and Uploading
 

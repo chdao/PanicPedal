@@ -352,47 +352,48 @@ void goToDeepSleep() {
   rtc_gpio_pullup_en((gpio_num_t)PEDAL_RIGHT_NC_PIN);
   rtc_gpio_pulldown_dis((gpio_num_t)PEDAL_RIGHT_NC_PIN);
   
-  // Configure GPIO2 as RTC GPIO for ext1 wakeup
-  // IMPORTANT: Always configure with pull-up so GPIO2 reads HIGH when no pedal is attached
+  // Configure GPIO2 and GPIO1 as RTC GPIOs for ext1 wakeup (wake on either pedal)
+  // IMPORTANT: Always configure with pull-up so pins read HIGH when no pedal is attached
   rtc_gpio_init((gpio_num_t)PEDAL_LEFT_NO_PIN);
   rtc_gpio_set_direction((gpio_num_t)PEDAL_LEFT_NO_PIN, RTC_GPIO_MODE_INPUT_ONLY);
   rtc_gpio_pullup_en((gpio_num_t)PEDAL_LEFT_NO_PIN);
   rtc_gpio_pulldown_dis((gpio_num_t)PEDAL_LEFT_NO_PIN);
+
+  rtc_gpio_init((gpio_num_t)PEDAL_RIGHT_NO_PIN);
+  rtc_gpio_set_direction((gpio_num_t)PEDAL_RIGHT_NO_PIN, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pullup_en((gpio_num_t)PEDAL_RIGHT_NO_PIN);
+  rtc_gpio_pulldown_dis((gpio_num_t)PEDAL_RIGHT_NO_PIN);
   
   // Small delay to allow RTC GPIO pull-up to stabilize
   delay(20);  // Longer delay to ensure pull-up is active
   
-  // Check GPIO2 multiple times - if LOW at any point, don't sleep
-  // GPIO2 must be HIGH when we configure wakeup, otherwise it will wake immediately
-  // With pull-up enabled, GPIO2 should read HIGH when no pedal is attached
-  int highReads = 0;
+  // Check GPIO1/GPIO2 multiple times - if either is LOW, don't sleep
+  // Both pins must be HIGH when we configure wakeup, otherwise it will wake immediately.
+  // With pull-ups enabled, they should read HIGH when no pedal is attached.
+  int leftHighReads = 0;
+  int rightHighReads = 0;
   for (int i = 0; i < 10; i++) {  // More reads to ensure stability
-    if (digitalRead(PEDAL_LEFT_NO_PIN) == HIGH) {
-      highReads++;
-    }
+    if (digitalRead(PEDAL_LEFT_NO_PIN) == HIGH) leftHighReads++;
+    if (digitalRead(PEDAL_RIGHT_NO_PIN) == HIGH) rightHighReads++;
     delay(5);
   }
   
-  // If GPIO2 is LOW (pedal pressed), don't sleep
-  // But allow sleep if GPIO2 is HIGH (no pedal attached or pedal not pressed)
-  // With pull-up, GPIO2 should be HIGH when no pedal is attached
-  if (highReads < 8) {
-    // GPIO2 is LOW or unstable - might be pedal pressed or floating
-    // Don't sleep if pedal is pressed, but allow sleep if it's just unstable
-    // Check one more time after a longer delay
+  // If either pin is LOW (pedal pressed), don't sleep.
+  // If it's just unstable, do a final check after a longer delay.
+  if (leftHighReads < 8 || rightHighReads < 8) {
     delay(20);
-    if (digitalRead(PEDAL_LEFT_NO_PIN) == LOW) {
-      return;  // Skip sleep if pedal is definitely pressed
+    if (digitalRead(PEDAL_LEFT_NO_PIN) == LOW || digitalRead(PEDAL_RIGHT_NO_PIN) == LOW) {
+      return;  // Skip sleep if a pedal is definitely pressed
     }
-    // If it's HIGH now, it was just unstable - proceed with sleep
+    // If both are HIGH now, it was just unstable - proceed with sleep
   }
   
-  // Disable all wakeup sources, then enable only GPIO2
+  // Disable all wakeup sources, then enable GPIO1 + GPIO2
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   
-  // Configure ext1 wakeup: only GPIO2, LOW trigger
-  // GPIO2 is bit 2, so mask = 1 << 2 = 4 = 0x4
-  uint64_t gpioMask = (1ULL << PEDAL_LEFT_NO_PIN);  // Only GPIO2
+  // Configure ext1 wakeup: GPIO1 OR GPIO2, LOW trigger (either pedal press)
+  // GPIO2 is bit 2, GPIO1 is bit 1
+  uint64_t gpioMask = (1ULL << PEDAL_LEFT_NO_PIN) | (1ULL << PEDAL_RIGHT_NO_PIN);
   esp_err_t wakeupResult = esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ANY_LOW);
   
   // If wakeup configuration failed, don't sleep
@@ -400,11 +401,11 @@ void goToDeepSleep() {
     return;
   }
   
-  // CRITICAL: Check GPIO2 one more time AFTER configuring wakeup
-  // If GPIO2 goes LOW now, it will wake immediately
+  // CRITICAL: Check GPIO1/GPIO2 one more time AFTER configuring wakeup
+  // If either goes LOW now, it will wake immediately
   delay(10);
-  if (digitalRead(PEDAL_LEFT_NO_PIN) == LOW) {
-    // GPIO2 is LOW - will wake immediately, don't sleep
+  if (digitalRead(PEDAL_LEFT_NO_PIN) == LOW || digitalRead(PEDAL_RIGHT_NO_PIN) == LOW) {
+    // A pedal is pressed - will wake immediately, don't sleep
     return;
   }
   
@@ -444,23 +445,24 @@ void setup() {
         // EXT1 wakeup - check which GPIO triggered it
         uint64_t gpioMask = esp_sleep_get_ext1_wakeup_status();
         pinMode(PEDAL_LEFT_NO_PIN, INPUT_PULLUP);
+        pinMode(PEDAL_RIGHT_NO_PIN, INPUT_PULLUP);
         delay(10);  // Allow pin to stabilize
         
         bool gpio2State = digitalRead(PEDAL_LEFT_NO_PIN);
-        pedalPressedOnWakeup = (gpio2State == LOW);
+        bool gpio1State = digitalRead(PEDAL_RIGHT_NO_PIN);
+        pedalPressedOnWakeup = (gpio2State == LOW) || (gpio1State == LOW);
         
-        Serial.printf("Wakeup cause: EXT1 - GPIO mask: 0x%llx, GPIO2 state: %s\n",
-                     gpioMask, gpio2State == HIGH ? "HIGH" : "LOW");
+        Serial.printf("Wakeup cause: EXT1 - GPIO mask: 0x%llx, GPIO2=%s, GPIO1=%s\n",
+                     gpioMask,
+                     gpio2State == HIGH ? "HIGH" : "LOW",
+                     gpio1State == HIGH ? "HIGH" : "LOW");
         
         // Check which GPIO triggered the wakeup
         if (gpioMask & (1ULL << PEDAL_LEFT_NO_PIN)) {
           Serial.println("  -> GPIO2 triggered wakeup");
         }
-        if (gpioMask & (1ULL << PEDAL_LEFT_NC_PIN)) {
-          Serial.println("  -> GPIO6 triggered wakeup (unexpected!)");
-        }
-        if (gpioMask & (1ULL << PEDAL_RIGHT_NC_PIN)) {
-          Serial.println("  -> GPIO7 triggered wakeup (unexpected!)");
+        if (gpioMask & (1ULL << PEDAL_RIGHT_NO_PIN)) {
+          Serial.println("  -> GPIO1 triggered wakeup");
         }
         break;
       }
