@@ -10,6 +10,7 @@
 
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
+#include "shared/config.h"
 #include "shared/debug_format.h"
 #include "shared/domain/PairingState.h"
 #include "shared/domain/PedalReader.h"
@@ -346,6 +347,10 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         return;
       }
     }
+    
+    // Clear waiting flag - we received the ACK
+    pairingService.waitingForPairingConfirmedAck = false;
+    pairingService.pairingConfirmedSentTime = 0;
     
     // Receiver acknowledged our reconnection request - restore pairing state if not already paired
     if (!pairingState_isPaired(&pairingState)) {
@@ -746,9 +751,15 @@ void setup() {
           debugPrint("Failed to send MSG_PAIRING_CONFIRMED to saved receiver");
         }
       }
+      
+      // Track when we sent MSG_PAIRING_CONFIRMED - if no ACK within 1s, send MSG_TRANSMITTER_ONLINE
+      if (sent) {
+        pairingService.pairingConfirmedSentTime = millis();
+        pairingService.waitingForPairingConfirmedAck = true;
+      }
     }
   } else {
-    // Not paired - broadcast that we're online (for discovery)
+    // Not paired - no MAC saved, broadcast MSG_TRANSMITTER_ONLINE for discovery
     pairingService_broadcastOnline(&pairingService);
   }
   
@@ -831,6 +842,22 @@ void loop() {
   // Check discovery timeout
   if (pairingService_checkDiscoveryTimeout(&pairingService, currentTime)) {
     debugPrint("Discovery response timeout");
+  }
+  
+  // Check if MSG_PAIRING_CONFIRMED was sent and no ACK received within timeout
+  // If timeout occurred, send MSG_TRANSMITTER_ONLINE for discovery
+  if (pairingService.waitingForPairingConfirmedAck && pairingService.pairingConfirmedSentTime > 0) {
+    unsigned long timeSinceSent = currentTime - pairingService.pairingConfirmedSentTime;
+    if (timeSinceSent >= PAIRING_CONFIRMED_TIMEOUT_MS) {
+      // Timeout - no ACK received, send MSG_TRANSMITTER_ONLINE for discovery
+      pairingService.waitingForPairingConfirmedAck = false;
+      pairingService.pairingConfirmedSentTime = 0;
+      
+      if (DEBUG_ENABLED) {
+        debugPrint("MSG_PAIRING_CONFIRMED timeout - no ACK received, sending MSG_TRANSMITTER_ONLINE");
+      }
+      pairingService_broadcastOnline(&pairingService);
+    }
   }
   
   // CRITICAL: Check if pedal is currently pressed and reset activity timer

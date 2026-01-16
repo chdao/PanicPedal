@@ -30,6 +30,8 @@ void pairingService_init(PairingService* service, PairingState* state, EspNowTra
   service->hasPendingDiscovery = false;
   memset(service->pendingDiscoveryMAC, 0, 6);
   service->pendingDiscoveryChannel = 0;
+  service->pairingConfirmedSentTime = 0;
+  service->waitingForPairingConfirmedAck = false;
 }
 
 void pairingService_handleBeacon(PairingService* service, const uint8_t* senderMAC, const beacon_message* beacon) {
