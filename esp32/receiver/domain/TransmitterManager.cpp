@@ -128,6 +128,28 @@ int transmitterManager_calculateSlotsUsed(const TransmitterManager* manager) {
   return slots;
 }
 
+// Calculate slots reserved by ALL loaded transmitters (including unresponsive ones)
+// This is used to determine if grace period should be bypassed
+int transmitterManager_calculateReservedSlots(const TransmitterManager* manager) {
+  int slots = 0;
+  for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
+    // Check if slot is occupied
+    bool slotOccupied = false;
+    for (int j = 0; j < 6; j++) {
+      if (manager->transmitters[i].mac[j] != 0) {
+        slotOccupied = true;
+        break;
+      }
+    }
+    // Count ALL loaded transmitters (responsive or not) - they reserve slots
+    if (slotOccupied) {
+      int slotsForThis = (manager->transmitters[i].pedalMode == 0) ? 2 : 1;
+      slots += slotsForThis;
+    }
+  }
+  return slots;
+}
+
 bool transmitterManager_hasFreeSlots(const TransmitterManager* manager, int slotsNeeded) {
   // Use calculated slots (only responsive transmitters) instead of stored slotsUsed
   int currentSlots = transmitterManager_calculateSlotsUsed(manager);

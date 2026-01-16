@@ -1,11 +1,9 @@
 #include "PedalReader.h"
 #include <Arduino.h>
+#include "../config.h"
 
 // Global pointer to PedalReader instance (needed for ISR)
 PedalReader* g_pedalReader = nullptr;
-
-// Debounce time in milliseconds (ignore interrupts that occur within this time)
-#define DEBOUNCE_TIME_MS 50
 
 // Interrupt Service Routines - minimal ISRs that only set flags
 // GPIO reading and debouncing happen in main loop to avoid watchdog timeouts

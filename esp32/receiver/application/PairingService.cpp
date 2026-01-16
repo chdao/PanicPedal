@@ -2,7 +2,9 @@
 #include <WiFi.h>
 #include <string.h>
 #include <Arduino.h>
+#include "../domain/SlotManager.h"
 #include "../shared/domain/PedalSlots.h"
+#include "../shared/config.h"
 
 void receiverPairingService_init(ReceiverPairingService* service, TransmitterManager* manager, 
                                   ReceiverEspNowTransport* transport, unsigned long bootTime) {
@@ -10,6 +12,7 @@ void receiverPairingService_init(ReceiverPairingService* service, TransmitterMan
   service->transport = transport;
   service->bootTime = bootTime;
   service->lastBeaconTime = 0;
+  service->initialPingTime = 0;  // Will be set when ping is actually sent
   service->gracePeriodCheckDone = false;
   service->initialPingSent = false;
   service->gracePeriodSkipped = false;
@@ -75,41 +78,35 @@ void receiverPairingService_handleDiscoveryRequest(ReceiverPairingService* servi
   int slotsNeeded = getSlotsNeeded(pedalMode);
   
   if (isKnownTransmitter) {
-    // Known transmitter - check if new pedal mode fits
+    // Known transmitter - check if new pedal mode fits using SlotManager
     bool wasAlreadyResponsive = service->manager->transmitters[knownIndex].seenOnBoot;
-    int currentSlotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
-    int oldTransmitterSlots = getSlotsNeeded(service->manager->transmitters[knownIndex].pedalMode);
+    SlotAvailabilityResult result;
     
     if (!wasAlreadyResponsive) {
       // Becoming responsive - check if new mode fits
-      if (currentSlotsUsed + slotsNeeded > MAX_PEDAL_SLOTS) {
-        if (service->debugCallback) {
-          service->debugCallback("Discovery request rejected: existing transmitter would exceed slots (current=%d, new mode needs=%d)", 
-                                currentSlotsUsed, slotsNeeded);
-        }
-        return;
+      result = slotManager_checkReconnection(service->manager, knownIndex, slotsNeeded);
+    } else {
+      // Already responsive - check if mode changed
+      result = slotManager_checkModeChange(service->manager, knownIndex, slotsNeeded);
+    }
+    
+    if (!result.canFit) {
+      if (service->debugCallback) {
+        service->debugCallback("Discovery request rejected: existing transmitter would exceed slots (current=%d, needed=%d, after=%d)", 
+                              result.currentSlotsUsed, slotsNeeded, result.slotsAfterChange);
       }
-    } else if (slotsNeeded != oldTransmitterSlots) {
-      // Mode changed - check if new mode fits
-      int slotsAfterChange = currentSlotsUsed - oldTransmitterSlots + slotsNeeded;
-      if (slotsAfterChange > MAX_PEDAL_SLOTS) {
-        if (service->debugCallback) {
-          service->debugCallback("Discovery request rejected: pedal mode change would exceed slots (old=%d, new=%d)", 
-                                oldTransmitterSlots, slotsNeeded);
-        }
-        return;
-      }
+      return;
     }
     
     service->manager->transmitters[knownIndex].seenOnBoot = true;
     service->manager->transmitters[knownIndex].lastSeen = currentTime;
   } else {
-    // New transmitter - check if slots available
-    int currentSlotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
-    if (currentSlotsUsed + slotsNeeded > MAX_PEDAL_SLOTS) {
+    // New transmitter - check if slots available using SlotManager
+    if (!slotManager_canFitNewTransmitter(service->manager, slotsNeeded)) {
       if (service->debugCallback) {
+        int currentSlots = slotManager_getCurrentSlotsUsed(service->manager);
         service->debugCallback("Discovery request rejected: not enough slots for new transmitter (current=%d, needed=%d)", 
-                              currentSlotsUsed, slotsNeeded);
+                              currentSlots, slotsNeeded);
       }
       return;
     }
@@ -204,8 +201,7 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
   int transmitterIndex = transmitterManager_findIndex(service->manager, txMAC);
   
   if (transmitterIndex >= 0) {
-    // Known transmitter (was paired before)
-    int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
+    // Known transmitter (was paired before) - use SlotManager for checks
     int slotsNeeded = getSlotsNeeded(service->manager->transmitters[transmitterIndex].pedalMode);
     bool isCurrentlyPaired = service->manager->transmitters[transmitterIndex].seenOnBoot;
     
@@ -213,35 +209,56 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
       char macStr[18];
       snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+      int currentSlots = slotManager_getCurrentSlotsUsed(service->manager);
       service->debugCallback("Known transmitter %s came online (currently paired: %s, active slots: %d/%d, needs: %d)", 
                              macStr, isCurrentlyPaired ? "yes" : "no", currentSlots, MAX_PEDAL_SLOTS, slotsNeeded);
     }
     
-    // If currently paired, always respond (it's reclaiming its own slots)
+    // Send MSG_PAIRING_CONFIRMED to known transmitters:
+    // - If currently paired: DON'T send (they're already paired, MSG_TRANSMITTER_ONLINE is just an acknowledgment)
+    // - If not currently paired: send only if slots are available (they're coming back online)
+    bool shouldRespond = false;
     if (isCurrentlyPaired) {
-      // Currently paired transmitter - always send confirmation
+      // Currently paired transmitter - DON'T send MSG_PAIRING_CONFIRMED
+      // The MSG_TRANSMITTER_ONLINE is just an acknowledgment that they're online
+      // Sending MSG_PAIRING_CONFIRMED here would create a loop
       if (service->debugCallback) {
         char macStr[18];
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
-        service->debugCallback("Transmitter %s is currently paired - sending MSG_PAIRING_CONFIRMED", macStr);
+        service->debugCallback("Transmitter %s is already paired - MSG_TRANSMITTER_ONLINE acknowledged, no response needed", macStr);
       }
+      // Just update last seen time
+      service->manager->transmitters[transmitterIndex].lastSeen = millis();
+      return;  // Don't send anything back
     } else {
-      // NOT currently paired - only respond if slots are available
-      int totalSlotsIfReconnects = currentSlots + slotsNeeded;
-      if (totalSlotsIfReconnects > MAX_PEDAL_SLOTS) {
-        // Slots are full and this transmitter is not currently paired - don't respond
+      // NOT currently paired - check if slots available using SlotManager
+      SlotAvailabilityResult result = slotManager_checkReconnection(service->manager, transmitterIndex, slotsNeeded);
+      if (result.canFit) {
+        shouldRespond = true;
+        if (service->debugCallback) {
+          char macStr[18];
+          snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                   txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+          service->debugCallback("Transmitter %s not currently paired but slots available - sending MSG_PAIRING_CONFIRMED", macStr);
+        }
+      } else {
         if (service->debugCallback) {
           char macStr[18];
           snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                    txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
           service->debugCallback("Transmitter %s not currently paired and slots full (%d + %d > %d) - not responding", 
-                                 macStr, currentSlots, slotsNeeded, MAX_PEDAL_SLOTS);
+                                 macStr, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
         }
         service->manager->transmitters[transmitterIndex].lastSeen = millis();
         return;
       }
-      // Slots available - will send confirmation below
+    }
+    
+    // shouldRespond should always be true here if we reach this point
+    // (either currently paired, or slots available)
+    if (!shouldRespond) {
+      return;  // Safety check (should never happen)
     }
     
     // Send pairing confirmation (either currently paired or slots available)
@@ -273,11 +290,11 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
     service->manager->transmitters[transmitterIndex].lastSeen = millis();
   } else {
     // Unknown transmitter (or previously known but removed)
-    int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
+    int currentSlots = slotManager_getCurrentSlotsUsed(service->manager);
     unsigned long timeSinceBoot = millis() - service->bootTime;
     bool gracePeriodEnded = (timeSinceBoot >= TRANSMITTER_TIMEOUT);
     
-    if (currentSlots >= MAX_PEDAL_SLOTS) {
+    if (slotManager_areAllSlotsFull(service->manager)) {
       // Receiver full - try to replace unresponsive transmitters
       memcpy(service->pendingNewTransmitterMAC, txMAC, 6);
       
@@ -358,9 +375,8 @@ void receiverPairingService_sendBeacon(ReceiverPairingService* service) {
     return;  // Grace period ended
   }
   
-  // Use calculated slots (only responsive transmitters) during grace period
-  int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
-  if (currentSlots >= MAX_PEDAL_SLOTS) {
+  // Use SlotManager to check if receiver is full
+  if (slotManager_areAllSlotsFull(service->manager)) {
     return;  // Receiver full (based on responsive transmitters only)
   }
   
@@ -374,22 +390,24 @@ void receiverPairingService_sendBeacon(ReceiverPairingService* service) {
 }
 
 // Ping known transmitters immediately on boot (before grace period/pairing)
-// Sends MSG_ALIVE to trigger transmitters to check pairing and send discovery requests if not paired
+// Sends MSG_PAIRING_CONFIRMED ONLY to previously known transmitters that are NOT currently paired
+// This happens BEFORE grace period so known transmitters get priority
+// Transmitters will accept this immediately and restore their pairing state
 void receiverPairingService_pingKnownTransmittersOnBoot(ReceiverPairingService* service) {
   if (service->initialPingSent) {
     return;  // Already sent initial ping
   }
   
-  // Send MSG_ALIVE to ALL known transmitters (from EEPROM) immediately on boot
-  // This triggers them to:
-  // - If paired: respond with MSG_ALIVE or MSG_TRANSMITTER_ONLINE
-  // - If not paired: send MSG_DISCOVERY_REQ to re-pair
-  // This happens before pairing/grace period to restore previous pairings
-  struct_message alive = {MSG_ALIVE, 0, false, 0};
+  // Send MSG_PAIRING_CONFIRMED ONLY to known transmitters that are NOT currently paired (seenOnBoot = false)
+  // On boot, all transmitters loaded from EEPROM start with seenOnBoot = false
+  // This gives them priority over new transmitters during grace period
+  pairing_confirmed_message confirm;
+  confirm.msgType = MSG_PAIRING_CONFIRMED;
+  WiFi.macAddress(confirm.receiverMAC);
   int pingCount = 0;
   
   if (service->debugCallback) {
-    service->debugCallback("Sending initial ping (MSG_ALIVE) to known transmitters to request discovery...");
+    service->debugCallback("Sending MSG_PAIRING_CONFIRMED to previously known transmitters (not currently paired)...");
   }
   
   for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
@@ -402,28 +420,41 @@ void receiverPairingService_pingKnownTransmittersOnBoot(ReceiverPairingService* 
       }
     }
     
-    // Send MSG_ALIVE to all known transmitters to trigger discovery requests
-    if (slotOccupied) {
+    // Only send MSG_PAIRING_CONFIRMED to known transmitters that are NOT currently paired
+    // (seenOnBoot = false means they haven't responded yet, so they're not currently paired)
+    if (slotOccupied && !service->manager->transmitters[i].seenOnBoot) {
       uint8_t* mac = service->manager->transmitters[i].mac;
       receiverEspNowTransport_addPeer(service->transport, mac, 0);
-      receiverEspNowTransport_send(service->transport, mac, (uint8_t*)&alive, sizeof(alive));
+      bool sent = receiverEspNowTransport_send(service->transport, mac, (uint8_t*)&confirm, sizeof(confirm));
       pingCount++;
       
       if (service->debugCallback) {
-        service->debugCallback("Sent MSG_ALIVE to transmitter %02X:%02X:%02X:%02X:%02X:%02X (requesting discovery)", 
-                               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        if (sent) {
+          service->debugCallback("Sent MSG_PAIRING_CONFIRMED to previously known transmitter %02X:%02X:%02X:%02X:%02X:%02X (not currently paired)", 
+                                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else {
+          service->debugCallback("Failed to send MSG_PAIRING_CONFIRMED to transmitter %02X:%02X:%02X:%02X:%02X:%02X", 
+                                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        }
       }
+      
+      // Don't mark as seen yet - wait for MSG_TRANSMITTER_ONLINE response
+      // The transmitter will send MSG_TRANSMITTER_ONLINE to acknowledge it received MSG_PAIRING_CONFIRMED
     }
   }
   
+  // Always set initialPingSent and initialPingTime, even if no transmitters to ping
+  // This ensures grace period timing is correct
+  service->initialPingSent = true;
+  service->initialPingTime = millis();  // Record when ping was actually sent
+  
   if (pingCount > 0) {
-    service->initialPingSent = true;
     if (service->debugCallback) {
-      service->debugCallback("Initial ping complete: %d transmitter(s) pinged, waiting for discovery requests", pingCount);
+      service->debugCallback("Initial pairing confirmation complete: %d previously known transmitter(s) notified (before grace period)", pingCount);
     }
   } else {
     if (service->debugCallback) {
-      service->debugCallback("No known transmitters to ping");
+      service->debugCallback("No previously known transmitters to notify");
     }
   }
 }
@@ -434,32 +465,27 @@ void receiverPairingService_pingKnownTransmitters(ReceiverPairingService* servic
     return;  // Grace period ended
   }
   
-  // During grace period, ping unresponsive known transmitters periodically
-  struct_message ping = {MSG_ALIVE, 0, false, 0};
-  for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
-    // Check if slot is occupied
-    bool slotOccupied = false;
-    for (int j = 0; j < 6; j++) {
-      if (service->manager->transmitters[i].mac[j] != 0) {
-        slotOccupied = true;
-        break;
-      }
-    }
-    
-    // Ping unresponsive known transmitters
-    if (slotOccupied && !service->manager->transmitters[i].seenOnBoot) {
-      receiverEspNowTransport_send(service->transport, service->manager->transmitters[i].mac, 
-                                   (uint8_t*)&ping, sizeof(ping));
-    }
-  }
+  // During grace period, send MSG_PAIRING_CONFIRMED to unresponsive known transmitters periodically
+  // But only send once per transmitter (don't spam) - wait for them to respond with pedal events or MSG_TRANSMITTER_ONLINE
+  // We already sent MSG_PAIRING_CONFIRMED on boot, so we don't need to keep sending it repeatedly
+  // The transmitter will send a pedal event or MSG_TRANSMITTER_ONLINE when it comes online, which will mark it as seen
+  
+  // Actually, we don't need to send MSG_PAIRING_CONFIRMED repeatedly - we already sent it on boot
+  // If the transmitter is online, it will send pedal events or MSG_TRANSMITTER_ONLINE
+  // If it's offline, sending repeatedly won't help
+  // So we can remove this periodic ping entirely, or just skip it
+  // The initial ping on boot is sufficient
 }
 
 void receiverPairingService_update(ReceiverPairingService* service, unsigned long currentTime) {
     unsigned long timeSinceBoot = currentTime - service->bootTime;
   
-  // Wait 1 second after initial ping, then check slot reassignment (only once)
-  if (!service->slotReassignmentDone && timeSinceBoot >= INITIAL_PING_WAIT) {
-    service->slotReassignmentDone = true;
+  // Wait 1 second after initial ping was sent, then check slot reassignment (only once)
+  // Only check if ping was actually sent and 1 second has elapsed since then
+  if (!service->slotReassignmentDone && service->initialPingSent && service->initialPingTime > 0) {
+    unsigned long timeSincePing = currentTime - service->initialPingTime;
+    if (timeSincePing >= INITIAL_PING_WAIT) {
+      service->slotReassignmentDone = true;
     
     // Count how many transmitters responded to initial ping
     int responsiveCount = 0;
@@ -508,32 +534,37 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
         service->debugCallback("Both pedals responded - keeping slot assignments");
       }
     } else if (responsiveCount == 0) {
-      // No transmitters responded - preserve all loaded transmitters (don't clear them)
-      // They might come online later, so keep them in their current slots
+      // No known transmitters responded after initial wait - they might come online later during grace period
       if (service->debugCallback) {
-        service->debugCallback("No pedals responded to initial ping - preserving loaded transmitters");
+        service->debugCallback("No known pedals replied to initial ping - preserving loaded transmitters");
       }
       // Don't modify anything - transmitters remain loaded from EEPROM
+    }
     }
   }
   
   // Continue with grace period logic
-  if (!service->gracePeriodCheckDone && timeSinceBoot >= INITIAL_PING_WAIT) {
+  // Check continuously if all slots are filled - end grace period early if so
+  // Note: Only bypass if transmitters RESPONDED during initial wait, not just if slots are reserved
+  // Only start grace period checks after initial ping was sent and 1 second has elapsed
+  if (!service->gracePeriodCheckDone && service->initialPingSent && service->initialPingTime > 0) {
+    unsigned long timeSincePing = currentTime - service->initialPingTime;
+    if (timeSincePing >= INITIAL_PING_WAIT) {
     
-    // Check if all slots are filled by responsive transmitters
-    int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
-    bool allSlotsFilled = (currentSlots >= MAX_PEDAL_SLOTS);
+    // Check if all slots are filled by responsive transmitters (those that responded)
+    bool allSlotsFilled = slotManager_areAllSlotsFull(service->manager);
     
     if (allSlotsFilled) {
-      // Skip grace period entirely - slots are full, no new pairing allowed
+      // All slots filled by responsive transmitters - bypass/end grace period
       service->gracePeriodCheckDone = true;
       service->gracePeriodSkipped = true;
       
       // Don't remove unresponsive transmitters - they stay in EEPROM until DELETE_RECORD is received
       // Recalculate slotsUsed based on responsive transmitters only
-      service->manager->slotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
+      int currentSlots = slotManager_getCurrentSlotsUsed(service->manager);
+      service->manager->slotsUsed = currentSlots;
       
-      // Count paired transmitters
+      // Count paired transmitters (responsive ones)
       int pairedCount = 0;
       for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
         bool slotOccupied = false;
@@ -549,21 +580,30 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
       }
       
       if (service->debugCallback) {
-        service->debugCallback("Grace period skipped: %d pedal(s) paired (%d/%d slots used)", 
-                              pairedCount, currentSlots, MAX_PEDAL_SLOTS);
+        if (timeSinceBoot <= INITIAL_PING_WAIT + 100) {
+          // Slots filled immediately after initial wait - bypass grace period
+          service->debugCallback("All slots filled immediately - bypassing grace period: %d pedal(s) paired (%d/%d slots used)", 
+                                pairedCount, currentSlots, MAX_PEDAL_SLOTS);
+        } else {
+          // Slots filled during grace period - ended early
+          service->debugCallback("Grace period ended early: %d pedal(s) paired (%d/%d slots used)", 
+                                pairedCount, currentSlots, MAX_PEDAL_SLOTS);
+        }
       }
-      return;  // Skip grace period, don't send beacons
+      return;  // End grace period, don't send beacons
     }
     
-    // Slots are available - start grace period normally
-    // Grace period will continue until timeout or slots fill up
-    if (timeSinceBoot > TRANSMITTER_TIMEOUT) {
+    // Slots are available - continue grace period normally
+    // Grace period will continue until timeout or slots fill up (checked continuously above)
+    if (timeSinceBoot >= TRANSMITTER_TIMEOUT) {
+      // Grace period timeout reached
       service->gracePeriodCheckDone = true;
       
       // After grace period timeout, update slotsUsed to match only responsive transmitters
       // Don't remove unresponsive transmitters - they stay in EEPROM until DELETE_RECORD is received
       // Recalculate slotsUsed based on responsive transmitters only
-      service->manager->slotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
+      int finalSlots = slotManager_getCurrentSlotsUsed(service->manager);
+      service->manager->slotsUsed = finalSlots;
       
       // Count paired transmitters
       int pairedCount = 0;
@@ -581,61 +621,44 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
       }
       
       if (service->debugCallback) {
-        int finalSlots = transmitterManager_calculateSlotsUsed(service->manager);
-        service->debugCallback("Grace period ended: %d pedal(s) paired (%d/%d slots used)", 
-                              pairedCount, finalSlots, MAX_PEDAL_SLOTS);
-      }
-    } else {
-      // Check if slots filled up during grace period
-      int currentSlotsDuringGrace = transmitterManager_calculateSlotsUsed(service->manager);
-      if (currentSlotsDuringGrace >= MAX_PEDAL_SLOTS) {
-        // All slots filled - end grace period early
-        service->gracePeriodCheckDone = true;
-        
-        // Don't remove unresponsive transmitters - they stay in EEPROM until DELETE_RECORD is received
-        // Recalculate slotsUsed based on responsive transmitters only
-        service->manager->slotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
-        
-        // Count paired transmitters
-        int pairedCount = 0;
-        for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
-          bool slotOccupied = false;
-          for (int j = 0; j < 6; j++) {
-            if (service->manager->transmitters[i].mac[j] != 0) {
-              slotOccupied = true;
-              break;
-            }
+        int reservedSlots = transmitterManager_calculateReservedSlots(service->manager);
+        if (pairedCount == 0) {
+          if (reservedSlots >= MAX_PEDAL_SLOTS) {
+            // All slots reserved by known transmitters, but none responded
+            service->debugCallback("Grace period ended: All slots reserved by known transmitters (%d/%d), but none replied - preserving loaded transmitters", 
+                                  reservedSlots, MAX_PEDAL_SLOTS);
+          } else {
+            // No slots reserved, no pedals paired
+            service->debugCallback("Grace period ended: No pedals paired - preserving loaded transmitters");
           }
-          if (slotOccupied && service->manager->transmitters[i].seenOnBoot) {
-            pairedCount++;
-          }
-        }
-        
-        if (service->debugCallback) {
-          service->debugCallback("Grace period ended early: %d pedal(s) paired (%d/%d slots used)", 
-                                pairedCount, currentSlotsDuringGrace, MAX_PEDAL_SLOTS);
+        } else {
+          service->debugCallback("Grace period ended: %d pedal(s) paired (%d/%d slots used)", 
+                                pairedCount, finalSlots, MAX_PEDAL_SLOTS);
         }
       }
     }
-  }
+    // Note: If slots fill up during grace period, the check at the top of this block will catch it
+    // and end grace period early (already handled above)
+    }  // Close: if (timeSincePing >= INITIAL_PING_WAIT)
+  }  // Close: if (!service->gracePeriodCheckDone && service->initialPingSent && service->initialPingTime > 0)
   
-  // Send beacon and ping during grace period only (after initial wait)
+  // Send beacons during grace period only (after initial wait)
   // Only send beacons if slots are still available (known transmitters haven't filled all slots)
-  if (!service->gracePeriodCheckDone && timeSinceBoot >= INITIAL_PING_WAIT) {
-    int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
-    bool slotsAvailable = (currentSlots < MAX_PEDAL_SLOTS);
-    
-    // Ping unresponsive known transmitters periodically
-    if (currentTime - service->lastBeaconTime > BEACON_INTERVAL) {
-    receiverPairingService_pingKnownTransmitters(service);
-    service->lastBeaconTime = currentTime;
-    }
-    
-    // Only send beacons if slots are available (allows new pairing)
-    // If all known transmitters responded, no beacons = no new pairing
-    if (slotsAvailable && (currentTime - service->lastBeaconTime > BEACON_INTERVAL)) {
-      receiverPairingService_sendBeacon(service);
-      service->lastBeaconTime = currentTime;
+  // Note: We don't ping known transmitters periodically - we already sent MSG_PAIRING_CONFIRMED on boot
+  // If they're online, they'll respond with pedal events or MSG_TRANSMITTER_ONLINE
+  // Only send beacons after initial ping was sent and 1 second has elapsed
+  if (!service->gracePeriodCheckDone && service->initialPingSent && service->initialPingTime > 0) {
+    unsigned long timeSincePing = currentTime - service->initialPingTime;
+    if (timeSincePing >= INITIAL_PING_WAIT) {
+      int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
+      bool slotsAvailable = (currentSlots < MAX_PEDAL_SLOTS);
+      
+      // Only send beacons if slots are available (allows new pairing)
+      // If all known transmitters responded, no beacons = no new pairing
+      if (slotsAvailable && (currentTime - service->lastBeaconTime > BEACON_INTERVAL)) {
+        receiverPairingService_sendBeacon(service);
+        service->lastBeaconTime = currentTime;
+      }
     }
   }
   
@@ -644,8 +667,8 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
     // Don't remove unresponsive transmitters - they stay in EEPROM until DELETE_RECORD is received
     // Just send MSG_ALIVE to new transmitter if we have free slots
     uint8_t broadcastMAC[] = BROADCAST_MAC;
-    int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
-    if (currentSlots < MAX_PEDAL_SLOTS && 
+    int currentSlots = slotManager_getCurrentSlotsUsed(service->manager);
+    if (!slotManager_areAllSlotsFull(service->manager) && 
         memcmp(service->pendingNewTransmitterMAC, broadcastMAC, 6) != 0) {
       receiverEspNowTransport_addPeer(service->transport, service->pendingNewTransmitterMAC, 0);
       

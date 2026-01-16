@@ -276,6 +276,23 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
       delay(10);
       debugPrint("Received MSG_PAIRING_CONFIRMED from paired receiver - peer confirmed");
     }
+    
+    // Reply with MSG_PAIRING_CONFIRMED to acknowledge we received and accepted the pairing confirmation
+    // This lets the receiver know we're online and responsive
+    pairing_confirmed_message replyConfirm;
+    replyConfirm.msgType = MSG_PAIRING_CONFIRMED;
+    memcpy(replyConfirm.receiverMAC, senderMAC, 6);  // Send receiver's MAC back to confirm
+    
+    espNowTransport_addPeer(&transport, senderMAC, channel);
+    delay(10);  // Small delay to ensure peer is ready
+    bool sent = espNowTransport_send(&transport, senderMAC, (uint8_t*)&replyConfirm, sizeof(replyConfirm));
+    
+    if (sent) {
+      debugPrint("Sent MSG_PAIRING_CONFIRMED to acknowledge receiver's pairing confirmation");
+    } else {
+      debugPrint("Failed to send MSG_PAIRING_CONFIRMED acknowledgment");
+    }
+    
     return;
   }
   
@@ -305,6 +322,18 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         // Ensure peer is added (in case it wasn't already)
         espNowTransport_addPeer(&transport, senderMAC, channel);
         delay(10);  // Small delay to ensure peer is ready
+        
+        // Reply with MSG_PAIRING_CONFIRMED to acknowledge we received and accepted the pairing confirmation
+        pairing_confirmed_message replyConfirm;
+        replyConfirm.msgType = MSG_PAIRING_CONFIRMED;
+        memcpy(replyConfirm.receiverMAC, senderMAC, 6);  // Send receiver's MAC back to confirm
+        
+        bool sent = espNowTransport_send(&transport, senderMAC, (uint8_t*)&replyConfirm, sizeof(replyConfirm));
+        if (sent) {
+          debugPrint("Sent MSG_PAIRING_CONFIRMED to acknowledge receiver's pairing confirmation");
+        } else {
+          debugPrint("Failed to send MSG_PAIRING_CONFIRMED acknowledgment");
+        }
         
         // Reset activity timer since we're communicating
         onActivity();

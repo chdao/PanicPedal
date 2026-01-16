@@ -4,7 +4,10 @@
 
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
+#include "shared/config.h"
 #include "domain/TransmitterManager.h"
+#include "domain/SlotManager.h"
+#include "domain/SlotManager.cpp"  // Force compilation of SlotManager
 #include "infrastructure/EspNowTransport.h"
 #include "infrastructure/Persistence.h"
 #include "infrastructure/LEDService.h"
@@ -64,7 +67,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     return;
   }
   
-  // Handle transmitter online broadcast
+  // Handle transmitter online broadcast (only when transmitter comes online, not as response to MSG_PAIRING_CONFIRMED)
   if (len >= sizeof(transmitter_online_message)) {
     transmitter_online_message* onlineMsg = (transmitter_online_message*)data;
     if (onlineMsg->msgType == MSG_TRANSMITTER_ONLINE) {
@@ -76,6 +79,29 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
       }
       receiverPairingService_handleTransmitterOnline(&pairingService, senderMAC, channel);
       return;
+    }
+  }
+  
+  // Handle pairing confirmed message from transmitter (acknowledgment that it received our MSG_PAIRING_CONFIRMED)
+  if (len >= sizeof(pairing_confirmed_message)) {
+    pairing_confirmed_message* confirm = (pairing_confirmed_message*)data;
+    if (confirm->msgType == MSG_PAIRING_CONFIRMED) {
+      int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
+      if (transmitterIndex >= 0) {
+        // Known transmitter acknowledging our MSG_PAIRING_CONFIRMED - mark as seen
+        if (!transmitterManager.transmitters[transmitterIndex].seenOnBoot) {
+          transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
+          transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
+          debugMonitor_print(&debugMonitor, "Known transmitter %d acknowledged MSG_PAIRING_CONFIRMED - marking as paired", transmitterIndex);
+          invalidateSlotCache();  // Invalidate cache when transmitter becomes responsive
+        } else {
+          // Already marked as seen - just update last seen time
+          transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
+        }
+      } else {
+        debugMonitor_print(&debugMonitor, "Received MSG_PAIRING_CONFIRMED from unknown transmitter");
+      }
+      return;  // Don't process further - this is handled
     }
   }
   
@@ -133,7 +159,14 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
           debugMonitor_print(&debugMonitor, "Unknown transmitter sent pedal event during grace period - requesting discovery");
         }
       } else {
-        // Known transmitter - handle pedal event normally
+        // Known transmitter - mark as seen (it's responding after receiving MSG_PAIRING_CONFIRMED)
+        if (!transmitterManager.transmitters[transmitterIndex].seenOnBoot) {
+          transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
+          transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
+          debugMonitor_print(&debugMonitor, "Known transmitter %d responded with pedal event - marking as paired", transmitterIndex);
+        }
+        
+        // Handle pedal event normally
         char keyToPress;
         if (transmitterManager.transmitters[transmitterIndex].pedalMode == 0) {
           keyToPress = (msg->key == '1') ? 'l' : 'r';
@@ -224,8 +257,13 @@ void loop() {
     lastSlotCalculationTime = currentTime;
   }
   
-  // Update LED status - turn off immediately when grace period ends or slots are full
-  ledService_update(&ledService, currentTime, pairingService.gracePeriodCheckDone, cachedSlotsUsed);
+  // Update LED status - green during initial wait (1s after ping sent), blue during grace period, off otherwise
+  bool inInitialWait = false;
+  if (pairingService.initialPingSent && pairingService.initialPingTime > 0) {
+    unsigned long timeSincePing = currentTime - pairingService.initialPingTime;
+    inInitialWait = (timeSincePing < INITIAL_PING_WAIT_MS);
+  }
+  ledService_update(&ledService, currentTime, pairingService.gracePeriodCheckDone, cachedSlotsUsed, inInitialWait);
   
   // Send periodic heartbeat every minute with paired pedal count
   if (currentTime - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {

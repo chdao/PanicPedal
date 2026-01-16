@@ -4,13 +4,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "../domain/TransmitterManager.h"
+#include "../domain/SlotManager.h"
 #include "../infrastructure/EspNowTransport.h"
 #include "../shared/messages.h"
+#include "../shared/config.h"
 
-#define BEACON_INTERVAL 2000
-#define TRANSMITTER_TIMEOUT 30000  // 30 seconds
-#define ALIVE_RESPONSE_TIMEOUT 2000  // 2 seconds
-#define INITIAL_PING_WAIT 1000  // 1 second wait after initial ping before starting grace period
+// Use centralized config values
+#define BEACON_INTERVAL BEACON_INTERVAL_MS
+#define TRANSMITTER_TIMEOUT TRANSMITTER_TIMEOUT_MS
+#define ALIVE_RESPONSE_TIMEOUT ALIVE_RESPONSE_TIMEOUT_MS
+#define INITIAL_PING_WAIT INITIAL_PING_WAIT_MS
 
 // Forward declaration for debug callback
 typedef void (*DebugCallback)(const char* format, ...);
@@ -20,6 +23,7 @@ typedef struct {
   ReceiverEspNowTransport* transport;
   unsigned long bootTime;
   unsigned long lastBeaconTime;
+  unsigned long initialPingTime;  // Track when initial ping was sent (for 1-second wait)
   bool gracePeriodCheckDone;
   bool initialPingSent;  // Track if initial ping to known transmitters has been sent
   bool gracePeriodSkipped;  // Track if grace period was skipped because slots are full

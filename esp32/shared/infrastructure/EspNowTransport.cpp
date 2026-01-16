@@ -4,6 +4,7 @@
 #include <string.h>
 #include <Arduino.h>
 #include "../messages.h"
+#include "../config.h"
 
 static MessageReceivedCallback g_receiveCallback = nullptr;
 
@@ -35,7 +36,7 @@ bool espNowTransport_send(EspNowTransport* transport, const uint8_t* mac, const 
   if (esp_now_get_peer(mac, &peerInfo) != ESP_OK) {
     // Peer doesn't exist - add it with channel 0 (uses current WiFi channel)
     espNowTransport_addPeer(transport, mac, 0);
-    delay(2);  // Brief delay for peer to be ready (ESP32-S3 requires this)
+    delay(ESPNOW_PEER_READY_DELAY_MS);
     
     // Verify peer was added successfully
     if (esp_now_get_peer(mac, &peerInfo) != ESP_OK) {

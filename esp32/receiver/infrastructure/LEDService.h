@@ -11,11 +11,11 @@
 
 typedef struct {
   unsigned long bootTime;
-  bool lastLEDState;  // Track last LED state to avoid unnecessary updates
+  uint32_t lastLEDColor;  // Track last LED color to avoid unnecessary updates
 } LEDService;
 
 void ledService_init(LEDService* service, unsigned long bootTime);
-void ledService_update(LEDService* service, unsigned long currentTime, bool gracePeriodDone, int slotsUsed);
+void ledService_update(LEDService* service, unsigned long currentTime, bool gracePeriodDone, int slotsUsed, bool inInitialWait);
 
 #endif // LED_SERVICE_H
 

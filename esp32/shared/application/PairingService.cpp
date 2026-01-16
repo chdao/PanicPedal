@@ -111,9 +111,10 @@ void pairingService_handleAlive(PairingService* service, const uint8_t* senderMA
     bool isPairedReceiver = macEqual(senderMAC, service->pairingState->pairedReceiverMAC);
     
     if (isPairedReceiver) {
-      // Paired receiver requesting discovery - defer to main loop (can't send from callback)
+      // Paired receiver requesting discovery - send MSG_TRANSMITTER_ONLINE so receiver responds with MSG_PAIRING_CONFIRMED
+      // Defer to main loop (can't send from callback)
       if (debugEnabled) {
-        debugPrint("MSG_ALIVE from paired receiver: %s - deferring discovery request", formatMAC(senderMAC));
+        debugPrint("MSG_ALIVE from paired receiver: %s - will send MSG_TRANSMITTER_ONLINE", formatMAC(senderMAC));
       }
       service->hasPendingDiscovery = true;
       macCopy(service->pendingDiscoveryMAC, senderMAC);
@@ -240,55 +241,83 @@ void pairingService_processPendingDiscovery(PairingService* service) {
   memset(service->pendingDiscoveryMAC, 0, 6);
   service->pendingDiscoveryChannel = 0;
   
-  if (debugEnabled) {
-    debugPrint("Processing deferred discovery request to receiver: %s (channel=%d)", formatMAC(receiverMAC), channel);
-  }
-  
   // Validate transport is ready
   if (!service->transport || !service->transport->initialized) {
     if (debugEnabled) {
-      debugPrint("ESP-NOW transport not initialized - cannot send discovery request");
+      debugPrint("ESP-NOW transport not initialized - cannot send message");
     }
     return;
   }
   
-  // Add peer with the stored channel (from the original MSG_ALIVE message)
-  if (!espNowTransport_addPeer(service->transport, receiverMAC, channel)) {
+  // Check if we're paired to this receiver
+  bool isPaired = pairingState_isPaired(service->pairingState) && 
+                  macEqual(receiverMAC, service->pairingState->pairedReceiverMAC);
+  
+  if (isPaired) {
+    // Already paired - send MSG_TRANSMITTER_ONLINE so receiver responds with MSG_PAIRING_CONFIRMED
     if (debugEnabled) {
-      debugPrint("Failed to add peer for discovery request");
+      debugPrint("Sending MSG_TRANSMITTER_ONLINE to paired receiver: %s", formatMAC(receiverMAC));
     }
-    return;
-  }
-  
-  // Brief delay to ensure peer is ready (ESP32-S3 requires this)
-  yield();
-  delay(2);
-  yield();
-  
-  // Verify peer was added successfully before attempting to send
-  esp_now_peer_info_t peerInfo;
-  if (esp_now_get_peer(receiverMAC, &peerInfo) != ESP_OK) {
+    
+    espNowTransport_addPeer(service->transport, receiverMAC, channel);
+    yield();
+    delay(ESPNOW_PEER_READY_DELAY_MS);
+    yield();
+    
+    uint8_t transmitterMAC[6];
+    getCachedTransmitterMAC(transmitterMAC);
+    transmitter_online_message onlineMsg;
+    onlineMsg.msgType = MSG_TRANSMITTER_ONLINE;
+    macCopy(onlineMsg.transmitterMAC, transmitterMAC);
+    
+    bool sent = espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&onlineMsg, sizeof(onlineMsg));
     if (debugEnabled) {
-      debugPrint("Peer verification failed - peer not found after add");
+      debugPrint("MSG_TRANSMITTER_ONLINE %s to paired receiver", sent ? "sent successfully" : "send FAILED");
     }
-    return;
-  }
-  
-  // Send discovery request from main loop context (safe - not from ESP-NOW callback)
-  struct_message discovery = {MSG_DISCOVERY_REQ, 0, false, service->pedalMode};
-  bool sent = espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&discovery, sizeof(discovery));
-  
-  if (debugEnabled) {
+  } else {
+    // Not paired - send discovery request
+    if (debugEnabled) {
+      debugPrint("Processing deferred discovery request to receiver: %s (channel=%d)", formatMAC(receiverMAC), channel);
+    }
+    
+    // Add peer with the stored channel (from the original MSG_ALIVE message)
+    if (!espNowTransport_addPeer(service->transport, receiverMAC, channel)) {
+      if (debugEnabled) {
+        debugPrint("Failed to add peer for discovery request");
+      }
+      return;
+    }
+    
+    // Brief delay to ensure peer is ready (ESP32-S3 requires this)
+    yield();
+    delay(ESPNOW_PEER_READY_DELAY_MS);
+    yield();
+    
+    // Verify peer was added successfully before attempting to send
+    esp_now_peer_info_t peerInfo;
+    if (esp_now_get_peer(receiverMAC, &peerInfo) != ESP_OK) {
+      if (debugEnabled) {
+        debugPrint("Peer verification failed - peer not found after add");
+      }
+      return;
+    }
+    
+    // Send discovery request from main loop context (safe - not from ESP-NOW callback)
+    struct_message discovery = {MSG_DISCOVERY_REQ, 0, false, service->pedalMode};
+    bool sent = espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&discovery, sizeof(discovery));
+    
+    if (debugEnabled) {
+      if (sent) {
+        debugPrint("Discovery request sent successfully (from main loop)");
+      } else {
+        debugPrint("Discovery request send FAILED (from main loop)");
+      }
+    }
+    
+    // Only mark as waiting for response if send was successful
     if (sent) {
-      debugPrint("Discovery request sent successfully (from main loop)");
-    } else {
-      debugPrint("Discovery request send FAILED (from main loop)");
+      service->pairingState->waitingForDiscoveryResponse = true;
+      service->pairingState->discoveryRequestTime = millis();
     }
-  }
-  
-  // Only mark as waiting for response if send was successful
-  if (sent) {
-    service->pairingState->waitingForDiscoveryResponse = true;
-    service->pairingState->discoveryRequestTime = millis();
   }
 }
