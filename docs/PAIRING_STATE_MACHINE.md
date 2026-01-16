@@ -58,7 +58,7 @@ The system consists of:
 - Pairing cleared/reset
 
 **Behaviors:**
-- Broadcasts `MSG_TRANSMITTER_ONLINE` periodically
+- Broadcasts `MSG_TRANSMITTER_ONLINE` (only when no MAC saved, for discovery)
 - Listens for `MSG_BEACON` or `MSG_ALIVE` from receivers
 - Does not send pedal events
 
@@ -111,15 +111,18 @@ The system consists of:
 - Sends `MSG_DELETE_RECORD` to other receivers if they request pairing
 - Can enter deep sleep (preserves pairing in NVS)
 - On wake from deep sleep: Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast)
-- On boot/reset: Broadcasts `MSG_TRANSMITTER_ONLINE` (only when coming online, not as response)
+- On boot/reset: Only broadcasts `MSG_TRANSMITTER_ONLINE` if no MAC saved (for discovery)
+- If `MSG_PAIRING_CONFIRMED` sent and no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second: Broadcasts `MSG_TRANSMITTER_ONLINE` (fallback to discovery)
 
 **Transitions:**
 - `MSG_PAIRING_CONFIRMED` received from paired receiver → Confirm pairing → Reply with `MSG_PAIRING_CONFIRMED_ACK`
 - `MSG_PAIRING_CONFIRMED` received from different receiver → Send `MSG_DELETE_RECORD` → Return to UNPAIRED
 - `MSG_PAIRING_CONFIRMED` received (not paired) → Restore pairing state immediately → Reply with `MSG_PAIRING_CONFIRMED_ACK`
+- `MSG_PAIRING_CONFIRMED_ACK` received → Clear waiting flag → Restore pairing state if needed
 - Deep sleep → Pairing saved to NVS
-- Wake from deep sleep → Load pairing from NVS → Send `MSG_PAIRING_CONFIRMED` to saved receiver
-- Reset → Clear pairing → Return to UNPAIRED
+- Wake from deep sleep → Load pairing from NVS → Send `MSG_PAIRING_CONFIRMED` to saved receiver → Wait for ACK (1s timeout)
+- If `MSG_PAIRING_CONFIRMED` timeout (no ACK within 1s) → Broadcast `MSG_TRANSMITTER_ONLINE` for discovery
+- Reset → Clear pairing → Return to UNPAIRED → Broadcast `MSG_TRANSMITTER_ONLINE` (no MAC saved)
 
 ### Receiver: BOOT State
 
@@ -221,6 +224,7 @@ Transmitter                    Receiver
 Transmitter                    Receiver
      │                             │
      │── MSG_PAIRING_CONFIRMED ───>│ (on wake from deep sleep, to saved receiver)
+     │── [waiting for ACK, 1s timeout]
      │                             │
      │<── MSG_PAIRING_CONFIRMED_ACK│ (receiver acknowledges and confirms pairing)
      │                             │
@@ -229,7 +233,24 @@ Transmitter                    Receiver
      │                             │
 ```
 
-**Note:** Transmitter sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast). If receiver has slots available or transmitter is currently paired, receiver responds with `MSG_PAIRING_CONFIRMED_ACK` to acknowledge the request and confirm pairing. Transmitter restores pairing state and does not send another message.
+**Alternative Flow (Timeout):**
+```
+Transmitter                    Receiver
+     │                             │
+     │── MSG_PAIRING_CONFIRMED ───>│ (on wake from deep sleep, to saved receiver)
+     │── [waiting for ACK, 1s timeout]
+     │                             │
+     │── [No ACK received]         │
+     │── MSG_TRANSMITTER_ONLINE ──>│ (broadcast, fallback to discovery)
+     │                             │
+```
+
+**Note:** 
+- Transmitter sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast). 
+- If receiver has slots available or transmitter is currently paired, receiver responds with `MSG_PAIRING_CONFIRMED_ACK` within 1 second.
+- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` and clears waiting flag.
+- **If no ACK received within 1 second**: Transmitter broadcasts `MSG_TRANSMITTER_ONLINE` as fallback to discovery mode.
+- If no MAC saved on wake: Transmitter broadcasts `MSG_TRANSMITTER_ONLINE` immediately for discovery.
 
 ### Receiver Boot - Known Transmitter Reconnection
 
@@ -353,14 +374,17 @@ The receiver checks slot availability in these scenarios:
 
 ### Wake from Deep Sleep
 - Loads paired receiver MAC from NVS
-- Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast) - requests reconnection
+- If MAC saved: Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast) - requests reconnection
+- Records send time and sets waiting flag for `MSG_PAIRING_CONFIRMED_ACK`
 - If pedal pressed on wake, sends pedal event immediately (after pairing is restored)
 - Receiver responds with `MSG_PAIRING_CONFIRMED_ACK` if:
   - Transmitter is currently paired (always responds to reconfirm)
   - Transmitter is not currently paired but slots are available
-- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` (no further message sent)
-- If receiver doesn't respond (slots full and not currently paired), transmitter remains unpaired until next opportunity
+- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` (clears waiting flag, no further message sent)
+- **If no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second**: Broadcasts `MSG_TRANSMITTER_ONLINE` (fallback to discovery mode)
+- If receiver doesn't respond (slots full and not currently paired), transmitter broadcasts `MSG_TRANSMITTER_ONLINE` after timeout
 - If transmitter receives `MSG_PAIRING_CONFIRMED` from different receiver, sends `MSG_DELETE_RECORD` to that receiver
+- If no MAC saved: Broadcasts `MSG_TRANSMITTER_ONLINE` immediately (for discovery)
 
 ## Configuration
 
