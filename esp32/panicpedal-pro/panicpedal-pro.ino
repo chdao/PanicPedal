@@ -612,6 +612,8 @@ void setup() {
         bool gpio2State = digitalRead(PEDAL_LEFT_NO_PIN);
         bool gpio1State = digitalRead(PEDAL_RIGHT_NO_PIN);
         pedalPressedOnWakeup = (gpio2State == LOW) || (gpio1State == LOW);
+        pedal1PressedOnWakeup = (gpio2State == LOW);  // Left pedal (GPIO2)
+        pedal2PressedOnWakeup = (gpio1State == LOW);  // Right pedal (GPIO1)
         
         Serial.printf("Wakeup cause: EXT1 - GPIO mask: 0x%llx, GPIO2=%s, GPIO1=%s\n",
                      gpioMask,
@@ -785,19 +787,44 @@ void setup() {
       delay(20);  // Delay to ensure peer is ready
       
       if (peerAdded) {
-        // Send pedal press event to paired receiver
-        pedalService_sendPedalEvent(&pedalService, '1', true);
-        delay(50);  // Give time for message to be sent
-        
-        // Also check current pedal state - if still pressed, send again to be safe
-        pinMode(PEDAL_LEFT_NO_PIN, INPUT_PULLUP);
-        delay(5);
-        if (digitalRead(PEDAL_LEFT_NO_PIN) == LOW) {
-          if (DEBUG_ENABLED) {
-            debugPrint("Pedal still pressed - sending pedal event again");
-          }
+        // Send pedal press events for whichever pedals were pressed on wakeup
+        if (pedal1PressedOnWakeup) {
           pedalService_sendPedalEvent(&pedalService, '1', true);
-          delay(50);
+          delay(50);  // Give time for message to be sent
+          // CRITICAL: Update PedalReader's lastState to LOW since we just sent a press event
+          // This ensures that if the pedal is released before interrupts are attached,
+          // we can detect the state change and send a release event
+          pedalReader.pedal1State.lastState = LOW;
+          
+          // Also check current pedal state - if still pressed, send again to be safe
+          pinMode(PEDAL_LEFT_NO_PIN, INPUT_PULLUP);
+          delay(5);
+          if (digitalRead(PEDAL_LEFT_NO_PIN) == LOW) {
+            if (DEBUG_ENABLED) {
+              debugPrint("Pedal 1 still pressed - sending pedal event again");
+            }
+            pedalService_sendPedalEvent(&pedalService, '1', true);
+            delay(50);
+          }
+        }
+        
+        // Handle pedal 2 (right) if in dual mode and it was pressed
+        if (detectedMode == PEDAL_MODE_DUAL && pedal2PressedOnWakeup) {
+          pedalService_sendPedalEvent(&pedalService, '2', true);
+          delay(50);  // Give time for message to be sent
+          // CRITICAL: Update PedalReader's lastState to LOW since we just sent a press event
+          pedalReader.pedal2State.lastState = LOW;
+          
+          // Also check current pedal state - if still pressed, send again to be safe
+          pinMode(PEDAL_RIGHT_NO_PIN, INPUT_PULLUP);
+          delay(5);
+          if (digitalRead(PEDAL_RIGHT_NO_PIN) == LOW) {
+            if (DEBUG_ENABLED) {
+              debugPrint("Pedal 2 still pressed - sending pedal event again");
+            }
+            pedalService_sendPedalEvent(&pedalService, '2', true);
+            delay(50);
+          }
         }
       } else {
         if (DEBUG_ENABLED) {
@@ -819,6 +846,38 @@ void setup() {
   if (detectedMode == PEDAL_MODE_DUAL) {
     attachInterrupt(digitalPinToInterrupt(PEDAL_RIGHT_NO_PIN), pedal2ISR, CHANGE);
     pedalReader.interruptAttached2 = true;  // Mark interrupt as attached
+  }
+  
+  // CRITICAL: After attaching interrupts, check if pedal state changed during initialization
+  // If we sent a press event on wake but the pedal is now released, send a release event
+  if (wokeFromDeepSleep && pedalPressedOnWakeup && pairingState_isPaired(&pairingState)) {
+    delay(10);  // Small delay to let interrupts stabilize
+    
+    // Check pedal 1 (left) if it was pressed on wakeup
+    if (pedal1PressedOnWakeup) {
+      bool currentPedal1State = digitalRead(PEDAL_LEFT_NO_PIN);
+      if (currentPedal1State == HIGH && pedalReader.pedal1State.lastState == LOW) {
+        // Pedal 1 is now HIGH (released) but we sent a press event (lastState is LOW)
+        if (DEBUG_ENABLED) {
+          debugPrint("Pedal 1 released during initialization - sending release event");
+        }
+        pedalService_sendPedalEvent(&pedalService, '1', false);
+        pedalReader.pedal1State.lastState = HIGH;  // Update state to match current state
+      }
+    }
+    
+    // Check pedal 2 (right) if in dual mode and it was pressed on wakeup
+    if (detectedMode == PEDAL_MODE_DUAL && pedal2PressedOnWakeup) {
+      bool currentPedal2State = digitalRead(PEDAL_RIGHT_NO_PIN);
+      if (currentPedal2State == HIGH && pedalReader.pedal2State.lastState == LOW) {
+        // Pedal 2 is now HIGH (released) but we sent a press event (lastState is LOW)
+        if (DEBUG_ENABLED) {
+          debugPrint("Pedal 2 released during initialization - sending release event");
+        }
+        pedalService_sendPedalEvent(&pedalService, '2', false);
+        pedalReader.pedal2State.lastState = HIGH;  // Update state to match current state
+      }
+    }
   }
   
   if (DEBUG_ENABLED) {
