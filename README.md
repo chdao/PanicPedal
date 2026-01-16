@@ -1,4 +1,4 @@
-# ESPNow Perfectly Adequate Arcade Pedal
+# PanicPedal
 
 A wireless pedal system using ESP-NOW for low-latency communication between pedal transmitters and a USB HID keyboard receiver. Perfectly adequate for arcade gaming!
 
