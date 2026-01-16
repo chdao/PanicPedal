@@ -12,12 +12,15 @@ The system consists of:
 
 - **Known Transmitters**: Transmitters that were previously paired and stored in receiver's EEPROM
 - **Currently Paired**: Transmitters that have `seenOnBoot = true` (responded after receiver boot)
-- **MSG_PAIRING_CONFIRMED**: 
+- **MSG_PAIRING_CONFIRMED** (0x07): 
   - Sent by receiver to restore pairing with known transmitters (replaces MSG_ALIVE for known transmitters)
+  - Sent by transmitter to saved receiver on deep sleep wake (requesting reconnection)
+  - Bidirectional: receiver → transmitter (pairing confirmation), transmitter → receiver (reconnection request)
+- **MSG_PAIRING_CONFIRMED_ACK** (0x09):
   - Sent by transmitter to acknowledge it received and accepted the receiver's `MSG_PAIRING_CONFIRMED`
-  - Bidirectional confirmation: receiver → transmitter → receiver
+  - Prevents message loops (different from MSG_PAIRING_CONFIRMED)
 - **MSG_ALIVE**: Now only used to request discovery from unknown transmitters during grace period
-- **MSG_TRANSMITTER_ONLINE**: Only sent when transmitter comes online (boot or deep sleep wake), not as a response to `MSG_PAIRING_CONFIRMED`
+- **MSG_TRANSMITTER_ONLINE**: Only sent when transmitter comes online (boot or reset), not as a response to `MSG_PAIRING_CONFIRMED`
 - **Initial Ping Wait**: 1-second period after `MSG_PAIRING_CONFIRMED` is sent where receiver waits for transmitters to respond before starting grace period
 - **LED States**:
   - **GREEN** (solid): During initial 1-second wait after ping sent
@@ -107,13 +110,15 @@ The system consists of:
 - Responds to `MSG_ALIVE` from different receiver by sending `MSG_DELETE_RECORD`
 - Sends `MSG_DELETE_RECORD` to other receivers if they request pairing
 - Can enter deep sleep (preserves pairing in NVS)
-- Broadcasts `MSG_TRANSMITTER_ONLINE` on wake from deep sleep (only when coming online, not as response)
+- On wake from deep sleep: Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast)
+- On boot/reset: Broadcasts `MSG_TRANSMITTER_ONLINE` (only when coming online, not as response)
 
 **Transitions:**
-- `MSG_PAIRING_CONFIRMED` received → Restore pairing state immediately (if not already paired) → Reply with `MSG_PAIRING_CONFIRMED`
-- `MSG_PAIRING_CONFIRMED` received → Confirm pairing (if already paired) → Reply with `MSG_PAIRING_CONFIRMED`
+- `MSG_PAIRING_CONFIRMED` received from paired receiver → Confirm pairing → Reply with `MSG_PAIRING_CONFIRMED_ACK`
+- `MSG_PAIRING_CONFIRMED` received from different receiver → Send `MSG_DELETE_RECORD` → Return to UNPAIRED
+- `MSG_PAIRING_CONFIRMED` received (not paired) → Restore pairing state immediately → Reply with `MSG_PAIRING_CONFIRMED_ACK`
 - Deep sleep → Pairing saved to NVS
-- Wake from deep sleep → Load pairing from NVS → Send `MSG_TRANSMITTER_ONLINE` (broadcast when coming online)
+- Wake from deep sleep → Load pairing from NVS → Send `MSG_PAIRING_CONFIRMED` to saved receiver
 - Reset → Clear pairing → Return to UNPAIRED
 
 ### Receiver: BOOT State
@@ -167,11 +172,15 @@ The system consists of:
 **Behaviors:**
 - Only accepts discovery from known transmitters
 - Processes pedal events
-- Handles `MSG_PAIRING_CONFIRMED` from transmitters (acknowledgment that they received our pairing confirmation):
-  - Marks transmitter as `seenOnBoot = true` when `MSG_PAIRING_CONFIRMED` is received
+- Handles `MSG_PAIRING_CONFIRMED` from transmitters (reconnection request after deep sleep):
+  - If currently paired: Always responds with `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
+  - If not currently paired but slots available: Responds with `MSG_PAIRING_CONFIRMED`
+  - If not currently paired and slots full: Does not respond
+- Handles `MSG_PAIRING_CONFIRMED_ACK` from transmitters (acknowledgment that they received our pairing confirmation):
+  - Marks transmitter as `seenOnBoot = true` when `MSG_PAIRING_CONFIRMED_ACK` is received
   - Updates `lastSeen` time
 - Sends `MSG_PAIRING_CONFIRMED` to known transmitters that send `MSG_TRANSMITTER_ONLINE`:
-  - If currently paired (`seenOnBoot = true`): **DOES NOT** send `MSG_PAIRING_CONFIRMED` (to avoid loops)
+  - If currently paired (`seenOnBoot = true`): Always sends `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
   - If not currently paired but slots available: Sends `MSG_PAIRING_CONFIRMED`
   - If not currently paired and slots full: Does not respond
 - Marks transmitters as `seenOnBoot = true` when they send pedal events
@@ -179,10 +188,11 @@ The system consists of:
 - Can replace unresponsive transmitters if slots full
 
 **Transitions:**
-- `MSG_TRANSMITTER_ONLINE` from known transmitter (currently paired) → **DO NOT** send `MSG_PAIRING_CONFIRMED` (acknowledge only)
+- `MSG_TRANSMITTER_ONLINE` from known transmitter (currently paired) → Always send `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
 - `MSG_TRANSMITTER_ONLINE` from known transmitter (not currently paired) → Check slots → Send `MSG_PAIRING_CONFIRMED` if available
 - `MSG_TRANSMITTER_ONLINE` from unknown → Check slots → Send `MSG_ALIVE` to request discovery if available
-- `MSG_PAIRING_CONFIRMED` from known transmitter → Mark as `seenOnBoot = true` (acknowledgment received)
+- `MSG_PAIRING_CONFIRMED` from known transmitter → Check slots → Send `MSG_PAIRING_CONFIRMED` back if available
+- `MSG_PAIRING_CONFIRMED_ACK` from known transmitter → Mark as `seenOnBoot = true` (acknowledgment received)
 - `MSG_PEDAL_EVENT` from known transmitter → Mark as `seenOnBoot = true`
 - `MSG_DELETE_RECORD` received → Remove transmitter from list
 
@@ -210,13 +220,17 @@ Transmitter                    Receiver
 ```
 Transmitter                    Receiver
      │                             │
-     │── MSG_TRANSMITTER_ONLINE ──>│ (on wake from deep sleep)
+     │── MSG_PAIRING_CONFIRMED ───>│ (on wake from deep sleep, to saved receiver)
      │                             │
-     │<── MSG_PAIRING_CONFIRMED ───│ (if known transmitter)
+     │<── MSG_PAIRING_CONFIRMED ───│ (receiver confirms pairing is still valid)
+     │                             │
+     │── MSG_PAIRING_CONFIRMED_ACK─>│ (transmitter acknowledges)
      │                             │
      │── MSG_PEDAL_EVENT ──────────>│ (immediately if pedal pressed)
      │                             │
 ```
+
+**Note:** Transmitter sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast). If receiver has slots available or transmitter is currently paired, receiver responds with `MSG_PAIRING_CONFIRMED`. Transmitter then replies with `MSG_PAIRING_CONFIRMED_ACK`.
 
 ### Receiver Boot - Known Transmitter Reconnection
 
@@ -228,7 +242,7 @@ Receiver                       Transmitter
      │                             │── Restores pairing state
      │                             │── Saves to NVS
      │                             │
-     │<── MSG_PAIRING_CONFIRMED ───│ (transmitter acknowledges)
+     │<── MSG_PAIRING_CONFIRMED_ACK│ (transmitter acknowledges)
      │                             │
      │── Marks as seenOnBoot=true  │
      │── Checks responses after 1s │
@@ -241,6 +255,8 @@ Receiver                       Transmitter
 - Records `initialPingTime` when ping is sent
 - Waits 1 second from `initialPingTime` before checking responses
 - LED: **GREEN** (solid) during this 1-second wait
+
+**Note:** Transmitter replies with `MSG_PAIRING_CONFIRMED_ACK` (not `MSG_PAIRING_CONFIRMED`) to acknowledge receipt.
 
 ### Grace Period Discovery (Unknown Transmitter)
 
@@ -269,7 +285,7 @@ Receiver                       Transmitter
      │                             │── Restores pairing state
      │                             │── Saves to NVS
      │                             │
-     │<── MSG_PAIRING_CONFIRMED ───│ (transmitter acknowledges)
+     │<── MSG_PAIRING_CONFIRMED_ACK│ (transmitter acknowledges)
      │                             │
      │── Marks as seenOnBoot=true  │
      │── Checks if slots full      │
@@ -277,7 +293,7 @@ Receiver                       Transmitter
      │                             │
 ```
 
-**Note:** Transmitter can also respond with `MSG_PEDAL_EVENT` instead of `MSG_PAIRING_CONFIRMED`, which also marks it as `seenOnBoot = true`.
+**Note:** Transmitter replies with `MSG_PAIRING_CONFIRMED_ACK` (not `MSG_PAIRING_CONFIRMED`). Transmitter can also respond with `MSG_PEDAL_EVENT`, which also marks it as `seenOnBoot = true`.
 
 ## Slot Management
 
@@ -316,7 +332,13 @@ The receiver checks slot availability in these scenarios:
 
 ### Slot Full
 - Receiver rejects discovery requests if slots full
-- Exception: Known transmitters reclaiming their slots
+- Exception: Known transmitters reclaiming their slots (always allowed)
+- Receiver does not respond to `MSG_PAIRING_CONFIRMED` or `MSG_TRANSMITTER_ONLINE` from known transmitters if slots full and transmitter is not currently paired
+
+### Different Receiver Pairing Attempt
+- If transmitter receives `MSG_PAIRING_CONFIRMED` from a different receiver while already paired:
+  - Transmitter sends `MSG_DELETE_RECORD` to that receiver
+  - Transmitter does not send `MSG_PAIRING_CONFIRMED_ACK` (rejects pairing)
 
 ### Channel Mismatch
 - ESP-NOW handles channel automatically
@@ -332,11 +354,14 @@ The receiver checks slot availability in these scenarios:
 
 ### Wake from Deep Sleep
 - Loads paired receiver MAC from NVS
-- Broadcasts `MSG_TRANSMITTER_ONLINE` immediately (only when coming online, not as response)
-- If pedal pressed on wake, sends pedal event immediately
-- Receiver responds with `MSG_PAIRING_CONFIRMED` (if known transmitter and not already paired)
-- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED` → Replies with `MSG_PAIRING_CONFIRMED`
-- If receiver doesn't respond (slots full or not known), transmitter remains unpaired until next opportunity
+- Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast) - requests reconnection
+- If pedal pressed on wake, sends pedal event immediately (after pairing is restored)
+- Receiver responds with `MSG_PAIRING_CONFIRMED` if:
+  - Transmitter is currently paired (always responds to reconfirm)
+  - Transmitter is not currently paired but slots are available
+- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED` → Replies with `MSG_PAIRING_CONFIRMED_ACK`
+- If receiver doesn't respond (slots full and not currently paired), transmitter remains unpaired until next opportunity
+- If transmitter receives `MSG_PAIRING_CONFIRMED` from different receiver, sends `MSG_DELETE_RECORD` to that receiver
 
 ## Configuration
 
