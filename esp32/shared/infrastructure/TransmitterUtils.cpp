@@ -29,13 +29,9 @@ void transmitterUtils_serialPrint(const char* format, ...) {
 }
 
 void transmitterUtils_serialPrint_va(const char* format, va_list args) {
-  // This function is kept for backward compatibility
-  // It now formats the message and calls debugPrint (unified function)
-  // Note: debugPrint is defined in the .ino file and will be available when this is included
+  // Format message and forward to unified debugPrint function
   char buffer[250];
   vsnprintf(buffer, sizeof(buffer), format, args);
-  
-  // Forward declaration - debugPrint is defined in transmitter.ino
   extern void debugPrint(const char* format, ...);
   debugPrint("%s", buffer);
 }

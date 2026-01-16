@@ -13,6 +13,7 @@
 #include "shared/debug_format.h"
 #include "shared/domain/PairingState.h"
 #include "shared/domain/PedalReader.h"
+#include "shared/domain/MacUtils.h"
 #include "shared/infrastructure/EspNowTransport.h"
 #include "shared/application/PairingService.h"
 #include "shared/application/PedalService.h"
@@ -187,7 +188,6 @@ unsigned long bootTime = 0;
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel);
 void onPaired(const uint8_t* receiverMAC);
 void onActivity();
-bool macEqual(const uint8_t* mac1, const uint8_t* mac2);  // Defined in PairingService.cpp
 uint8_t detectPedalMode();
 
 void onPaired(const uint8_t* receiverMAC) {
@@ -245,6 +245,40 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     return;
   }
   
+  // Handle pairing confirmed message (can be received before pairing state is set, e.g., after deep sleep)
+  if (msgType == MSG_PAIRING_CONFIRMED && len >= sizeof(pairing_confirmed_message)) {
+    pairing_confirmed_message* confirm = (pairing_confirmed_message*)data;
+    
+    // If we're not paired yet but receiver says we are, restore pairing state
+    if (!pairingState_isPaired(&pairingState)) {
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               senderMAC[0], senderMAC[1], senderMAC[2],
+               senderMAC[3], senderMAC[4], senderMAC[5]);
+      debugPrint("Received MSG_PAIRING_CONFIRMED - restoring pairing state with receiver %s", macStr);
+      memcpy(pairingState.pairedReceiverMAC, senderMAC, 6);
+      pairingState.isPaired = true;
+      
+      // Ensure peer is added
+      espNowTransport_addPeer(&transport, senderMAC, channel);
+      delay(10);
+      
+      // Save to NVS
+      Preferences preferences;
+      preferences.begin("pedal", false);
+      preferences.putBytes("pairedMAC", senderMAC, 6);
+      preferences.end();
+      
+      debugPrint("Pairing restored - ready to send pedal events");
+    } else {
+      // Already paired - just ensure peer is added
+      espNowTransport_addPeer(&transport, senderMAC, channel);
+      delay(10);
+      debugPrint("Received MSG_PAIRING_CONFIRMED from paired receiver - peer confirmed");
+    }
+    return;
+  }
+  
   // Handle other messages
   if (len < sizeof(struct_message)) {
     debugPrint("Message too short");
@@ -259,10 +293,21 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   if (pairingState_isPaired(&pairingState)) {
     // Already paired - check if message is from our paired receiver
     if (memcmp(senderMAC, pairingState.pairedReceiverMAC, 6) == 0) {
-      // Message from our paired receiver - handle MSG_ALIVE to send discovery request
+      // Message from our paired receiver
       if (msg->msgType == MSG_ALIVE) {
         debugPrint("Received MSG_ALIVE from paired receiver - calling handleAlive");
         pairingService_handleAlive(&pairingService, senderMAC, channel);
+      } else if (msg->msgType == MSG_PAIRING_CONFIRMED && len >= sizeof(pairing_confirmed_message)) {
+        // Receiver confirmed we're paired - ensure peer is added and we're ready
+        pairing_confirmed_message* confirm = (pairing_confirmed_message*)data;
+        debugPrint("Received MSG_PAIRING_CONFIRMED from paired receiver");
+        
+        // Ensure peer is added (in case it wasn't already)
+        espNowTransport_addPeer(&transport, senderMAC, channel);
+        delay(10);  // Small delay to ensure peer is ready
+        
+        // Reset activity timer since we're communicating
+        onActivity();
       } else {
         debugPrint("Received message from paired receiver (type=%d)", msg->msgType);
       }
@@ -285,8 +330,8 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
       pairingService_handleAlive(&pairingService, senderMAC, channel);
     } else {
       debugPrint("Unhandled message type=%d when not paired", msg->msgType);
-    }
   }
+}
 }
 
 
@@ -581,6 +626,19 @@ void setup() {
   // Small delay to ensure ESP-NOW is fully ready
   delay(100);
   
+  // CRITICAL: If we restored pairing from NVS, add the peer now so pedal events can be sent
+  if (pairingState_isPaired(&pairingState)) {
+    bool peerAdded = espNowTransport_addPeer(&transport, pairingState.pairedReceiverMAC, 0);
+    if (DEBUG_ENABLED) {
+      if (peerAdded) {
+        debugPrint("Added restored receiver peer to ESP-NOW");
+      } else {
+        debugPrint("Failed to add restored receiver peer to ESP-NOW");
+      }
+    }
+    delay(20);  // Delay to ensure peer is ready
+  }
+  
   // Broadcast that we're online (after ESP-NOW is fully initialized)
   pairingService_broadcastOnline(&pairingService);
   
@@ -673,15 +731,25 @@ void loop() {
   }
   
   // Check inactivity timeout and enter deep sleep if inactive for 5 minutes
-  unsigned long timeSinceActivity = currentTime - lastActivityTime;
+  // Handle millis() wrap-around (happens after ~49 days) and ensure lastActivityTime is valid
+  unsigned long timeSinceActivity;
+  if (lastActivityTime == 0) {
+    // Not initialized yet - treat as just started
+    timeSinceActivity = 0;
+  } else if (currentTime >= lastActivityTime) {
+    timeSinceActivity = currentTime - lastActivityTime;
+  } else {
+    // Wrap-around case: calculate time since wrap (shouldn't happen in practice)
+    timeSinceActivity = ((unsigned long)-1 - lastActivityTime) + currentTime + 1;
+  }
   if (timeSinceActivity > INACTIVITY_TIMEOUT) {
     // Don't go to sleep if pedal is currently pressed
     if (pedalPressed) {
       onActivity();
     } else {
       debugPrint("Inactivity timeout reached: %lu ms - entering deep sleep", timeSinceActivity);
-      goToDeepSleep();
-    }
+    goToDeepSleep();
+  }
   }
   
   // Update pedal service (only processes when interrupts occur)

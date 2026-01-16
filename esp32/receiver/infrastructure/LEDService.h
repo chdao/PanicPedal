@@ -11,6 +11,7 @@
 
 typedef struct {
   unsigned long bootTime;
+  bool lastLEDState;  // Track last LED state to avoid unnecessary updates
 } LEDService;
 
 void ledService_init(LEDService* service, unsigned long bootTime);

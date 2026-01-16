@@ -24,6 +24,18 @@ KeyboardService keyboardService;
 
 // System state
 unsigned long bootTime = 0;
+int cachedSlotsUsed = 0;  // Cache slot calculation to avoid recalculating every loop
+unsigned long lastSlotCalculationTime = 0;
+#define SLOT_CALCULATION_CACHE_MS 100  // Recalculate slots max once per 100ms
+
+// Heartbeat state
+unsigned long lastHeartbeatTime = 0;
+#define HEARTBEAT_INTERVAL_MS 60000  // 1 minute
+
+// Invalidate slot cache when transmitters change
+static void invalidateSlotCache() {
+  lastSlotCalculationTime = 0;  // Force immediate recalculation
+}
 
 // Forward declaration
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel);
@@ -89,6 +101,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         debugMonitor_print(&debugMonitor, "Received delete record request from transmitter %d - removing", index);
         transmitterManager_remove(&transmitterManager, index);
         persistence_save(&transmitterManager);
+        invalidateSlotCache();  // Invalidate cache when transmitter removed
       }
       break;
     }
@@ -98,6 +111,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
                          senderMAC[0], senderMAC[1], senderMAC[2], senderMAC[3], senderMAC[4], senderMAC[5], msg->pedalMode);
       receiverPairingService_handleDiscoveryRequest(&pairingService, senderMAC, msg->pedalMode, channel, millis());
       persistence_save(&transmitterManager);
+      invalidateSlotCache();  // Invalidate cache when transmitter added/modified
       break;
     }
     
@@ -203,11 +217,49 @@ void loop() {
   // Update pairing service (handles beacons, pings, replacement logic)
   receiverPairingService_update(&pairingService, currentTime);
   
-  // Update LED status - turn off immediately when grace period ends or slots are full
-  int slotsUsed = transmitterManager_calculateSlotsUsed(&transmitterManager);
-  ledService_update(&ledService, currentTime, pairingService.gracePeriodCheckDone, slotsUsed);
+  // Cache slot calculation - only recalculate periodically or when needed
+  // This avoids expensive iteration every loop iteration
+  if (currentTime - lastSlotCalculationTime >= SLOT_CALCULATION_CACHE_MS) {
+    cachedSlotsUsed = transmitterManager_calculateSlotsUsed(&transmitterManager);
+    lastSlotCalculationTime = currentTime;
+  }
   
-  delay(10);
+  // Update LED status - turn off immediately when grace period ends or slots are full
+  ledService_update(&ledService, currentTime, pairingService.gracePeriodCheckDone, cachedSlotsUsed);
+  
+  // Send periodic heartbeat every minute with paired pedal count
+  if (currentTime - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeatTime = currentTime;
+    
+    // Count paired transmitters (those with MAC addresses in slots)
+    // Note: We count all transmitters with MAC addresses, not just those with seenOnBoot=true,
+    // because a transmitter can be paired but not yet responded after coming back online
+    int pairedCount = 0;
+    for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
+      bool slotOccupied = false;
+      for (int j = 0; j < 6; j++) {
+        if (transmitterManager.transmitters[i].mac[j] != 0) {
+          slotOccupied = true;
+          break;
+        }
+      }
+      if (slotOccupied) {
+        pairedCount++;
+      }
+    }
+    
+    debugMonitor_print(&debugMonitor, "Heartbeat: %d pedal(s) paired (%d/%d slots used)", 
+                      pairedCount, cachedSlotsUsed, MAX_PEDAL_SLOTS);
+  }
+  
+  // Adaptive delay: shorter during grace period (needs responsiveness), longer when idle
+  if (pairingService.gracePeriodCheckDone) {
+    // After grace period - use longer delay (50ms = 20Hz) since we're mostly idle
+    delay(50);
+  } else {
+    // During grace period - use shorter delay (10ms = 100Hz) for responsiveness
+    delay(10);
+  }
 }
 
 // Include implementation files (Arduino IDE doesn't auto-compile .cpp files in subdirectories)

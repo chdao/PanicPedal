@@ -109,7 +109,7 @@ Since the receiver uses USB HID Keyboard, Serial output is not available for deb
 ### Setup
 
 1. **Upload debug monitor code** to a second ESP32 board:
-   - Use `debug-monitor/debug-monitor.ino`
+   - Use `esp32/debug-monitor/debug-monitor.ino`
    - Any ESP32 board with Serial/USB support works (e.g., ESP32-S3-DevKitC-1)
 
 2. **Power on the debug monitor** - It will automatically discover and pair with the receiver
@@ -154,7 +154,7 @@ Since the receiver uses USB HID Keyboard, Serial output is not available for deb
 ### Serial Monitor not working on receiver
 - This is expected when Keyboard is active on ESP32-S2/S3
 - Keyboard functionality should still work
-- **Use the debug monitor** - Upload `debug-monitor/debug-monitor.ino` to a second ESP32 board to receive debug messages wirelessly via ESP-NOW
+- **Use the debug monitor** - Upload `esp32/debug-monitor/debug-monitor.ino` to a second ESP32 board to receive debug messages wirelessly via ESP-NOW
 - Debug messages are automatically sent to the paired debug monitor device
 
 ### Multiple key presses

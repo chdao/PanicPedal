@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <string.h>
 #include <Arduino.h>
+#include "../shared/domain/PedalSlots.h"
 
 void receiverPairingService_init(ReceiverPairingService* service, TransmitterManager* manager, 
                                   ReceiverEspNowTransport* transport, unsigned long bootTime) {
@@ -71,19 +72,16 @@ void receiverPairingService_handleDiscoveryRequest(ReceiverPairingService* servi
                           isKnownTransmitter, inDiscoveryPeriod, timeSinceBoot);
   }
   
-  int slotsNeeded = (pedalMode == 0) ? 2 : 1;
+  int slotsNeeded = getSlotsNeeded(pedalMode);
   
   if (isKnownTransmitter) {
-    // Transmitter already exists - check if it can fit with the NEW pedal mode from discovery request
-    // Check BEFORE marking as seen, so we can check if it was previously responsive
+    // Known transmitter - check if new pedal mode fits
     bool wasAlreadyResponsive = service->manager->transmitters[knownIndex].seenOnBoot;
     int currentSlotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
-    int oldTransmitterSlots = (service->manager->transmitters[knownIndex].pedalMode == 0) ? 2 : 1;
+    int oldTransmitterSlots = getSlotsNeeded(service->manager->transmitters[knownIndex].pedalMode);
     
-    // If existing transmitter is not responsive yet, its old slots aren't counted in currentSlotsUsed
-    // So we need to account for the NEW slots it needs when checking availability
     if (!wasAlreadyResponsive) {
-      // Existing transmitter is becoming responsive - check if NEW pedal mode fits
+      // Becoming responsive - check if new mode fits
       if (currentSlotsUsed + slotsNeeded > MAX_PEDAL_SLOTS) {
         if (service->debugCallback) {
           service->debugCallback("Discovery request rejected: existing transmitter would exceed slots (current=%d, new mode needs=%d)", 
@@ -91,32 +89,29 @@ void receiverPairingService_handleDiscoveryRequest(ReceiverPairingService* servi
         }
         return;
       }
-    } else {
-      // Existing transmitter is already responsive - check if pedal mode change fits
-      if (slotsNeeded != oldTransmitterSlots) {
-        // Pedal mode changed - check if new mode fits
-        int slotsAfterChange = currentSlotsUsed - oldTransmitterSlots + slotsNeeded;
-        if (slotsAfterChange > MAX_PEDAL_SLOTS) {
-          if (service->debugCallback) {
-            service->debugCallback("Discovery request rejected: pedal mode change would exceed slots (old=%d, new=%d)", 
-                                  oldTransmitterSlots, slotsNeeded);
-          }
-          return;
+    } else if (slotsNeeded != oldTransmitterSlots) {
+      // Mode changed - check if new mode fits
+      int slotsAfterChange = currentSlotsUsed - oldTransmitterSlots + slotsNeeded;
+      if (slotsAfterChange > MAX_PEDAL_SLOTS) {
+        if (service->debugCallback) {
+          service->debugCallback("Discovery request rejected: pedal mode change would exceed slots (old=%d, new=%d)", 
+                                oldTransmitterSlots, slotsNeeded);
         }
+        return;
       }
     }
-    // Existing transmitter can fit with new pedal mode - mark as seen and proceed
+    
     service->manager->transmitters[knownIndex].seenOnBoot = true;
     service->manager->transmitters[knownIndex].lastSeen = currentTime;
   } else {
-    // New transmitter - check if there are free slots
+    // New transmitter - check if slots available
     int currentSlotsUsed = transmitterManager_calculateSlotsUsed(service->manager);
     if (currentSlotsUsed + slotsNeeded > MAX_PEDAL_SLOTS) {
       if (service->debugCallback) {
         service->debugCallback("Discovery request rejected: not enough slots for new transmitter (current=%d, needed=%d)", 
                               currentSlotsUsed, slotsNeeded);
       }
-      return;  // Not enough slots
+      return;
     }
   }
   
@@ -198,7 +193,7 @@ void receiverPairingService_handleDiscoveryRequest(ReceiverPairingService* servi
         service->manager->transmitters[existingIndex].lastSeen = millis();
         service->manager->transmitters[existingIndex].pedalMode = pedalMode;
       } else {
-        transmitterManager_add(service->manager, txMAC, pedalMode);
+    transmitterManager_add(service->manager, txMAC, pedalMode);
       }
     }
   }
@@ -209,29 +204,71 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
   int transmitterIndex = transmitterManager_findIndex(service->manager, txMAC);
   
   if (transmitterIndex >= 0) {
-    // Known transmitter
+    // Known transmitter (was paired before)
     int currentSlots = transmitterManager_calculateSlotsUsed(service->manager);
-    if (currentSlots >= MAX_PEDAL_SLOTS) {
-      // Receiver full - still update last seen but don't send MSG_ALIVE
-      service->manager->transmitters[transmitterIndex].lastSeen = millis();
-      return;
-    }
-    
-    // Check if this transmitter is currently paired (responsive/seen on boot)
+    int slotsNeeded = getSlotsNeeded(service->manager->transmitters[transmitterIndex].pedalMode);
     bool isCurrentlyPaired = service->manager->transmitters[transmitterIndex].seenOnBoot;
     
-    // Only send MSG_ALIVE if transmitter is currently paired
-    // This allows re-pairing after deep sleep for paired transmitters
+    if (service->debugCallback) {
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+      service->debugCallback("Known transmitter %s came online (currently paired: %s, active slots: %d/%d, needs: %d)", 
+                             macStr, isCurrentlyPaired ? "yes" : "no", currentSlots, MAX_PEDAL_SLOTS, slotsNeeded);
+    }
+    
+    // If currently paired, always respond (it's reclaiming its own slots)
     if (isCurrentlyPaired) {
-      receiverEspNowTransport_addPeer(service->transport, txMAC, channel);
-      
-      struct_message alive = {MSG_ALIVE, 0, false, 0};
-      receiverEspNowTransport_send(service->transport, txMAC, (uint8_t*)&alive, sizeof(alive));
-      
+      // Currently paired transmitter - always send confirmation
       if (service->debugCallback) {
-        service->debugCallback("Paired transmitter came online - requesting discovery");
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+        service->debugCallback("Transmitter %s is currently paired - sending MSG_PAIRING_CONFIRMED", macStr);
+      }
+    } else {
+      // NOT currently paired - only respond if slots are available
+      int totalSlotsIfReconnects = currentSlots + slotsNeeded;
+      if (totalSlotsIfReconnects > MAX_PEDAL_SLOTS) {
+        // Slots are full and this transmitter is not currently paired - don't respond
+        if (service->debugCallback) {
+          char macStr[18];
+          snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                   txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+          service->debugCallback("Transmitter %s not currently paired and slots full (%d + %d > %d) - not responding", 
+                                 macStr, currentSlots, slotsNeeded, MAX_PEDAL_SLOTS);
+        }
+        service->manager->transmitters[transmitterIndex].lastSeen = millis();
+        return;
+      }
+      // Slots available - will send confirmation below
+    }
+    
+    // Send pairing confirmation (either currently paired or slots available)
+    receiverEspNowTransport_addPeer(service->transport, txMAC, channel);
+    
+    // Send pairing confirmation message ("You're paired with me")
+    pairing_confirmed_message confirm;
+    confirm.msgType = MSG_PAIRING_CONFIRMED;
+    WiFi.macAddress(confirm.receiverMAC);
+    
+    bool sent = receiverEspNowTransport_send(service->transport, txMAC, (uint8_t*)&confirm, sizeof(confirm));
+    
+    if (service->debugCallback) {
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+      bool wasResponsive = service->manager->transmitters[transmitterIndex].seenOnBoot;
+      if (sent) {
+        service->debugCallback("Sent MSG_PAIRING_CONFIRMED to known transmitter %s (was responsive: %s)", 
+                               macStr, wasResponsive ? "yes" : "no");
+      } else {
+        service->debugCallback("Failed to send MSG_PAIRING_CONFIRMED to known transmitter %s", macStr);
       }
     }
+    
+    // Mark as seen now (since we're confirming pairing)
+    service->manager->transmitters[transmitterIndex].seenOnBoot = true;
     
     service->manager->transmitters[transmitterIndex].lastSeen = millis();
   } else {
@@ -418,7 +455,7 @@ void receiverPairingService_pingKnownTransmitters(ReceiverPairingService* servic
 }
 
 void receiverPairingService_update(ReceiverPairingService* service, unsigned long currentTime) {
-  unsigned long timeSinceBoot = currentTime - service->bootTime;
+    unsigned long timeSinceBoot = currentTime - service->bootTime;
   
   // Wait 1 second after initial ping, then check slot reassignment (only once)
   if (!service->slotReassignmentDone && timeSinceBoot >= INITIAL_PING_WAIT) {
@@ -590,8 +627,8 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
     
     // Ping unresponsive known transmitters periodically
     if (currentTime - service->lastBeaconTime > BEACON_INTERVAL) {
-      receiverPairingService_pingKnownTransmitters(service);
-      service->lastBeaconTime = currentTime;
+    receiverPairingService_pingKnownTransmitters(service);
+    service->lastBeaconTime = currentTime;
     }
     
     // Only send beacons if slots are available (allows new pairing)

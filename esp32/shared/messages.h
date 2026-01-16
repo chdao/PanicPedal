@@ -4,16 +4,20 @@
 #include <stdint.h>
 
 // Message type definitions
-#define MSG_PEDAL_EVENT    0x00
-#define MSG_DISCOVERY_REQ  0x01
-#define MSG_DISCOVERY_RESP 0x02
-#define MSG_ALIVE          0x03
-#define MSG_DEBUG          0x04
-#define MSG_DEBUG_MONITOR_REQ 0x05
-#define MSG_DELETE_RECORD  0x06
-#define MSG_BEACON         0x07
-#define MSG_TRANSMITTER_ONLINE 0x09
-#define MSG_TRANSMITTER_PAIRED 0x0A
+// Core functionality and pairing (0x00-0x0F)
+#define MSG_PEDAL_EVENT        0x00
+#define MSG_DISCOVERY_REQ      0x01
+#define MSG_DISCOVERY_RESP     0x02
+#define MSG_ALIVE              0x03
+#define MSG_BEACON             0x04
+#define MSG_TRANSMITTER_ONLINE 0x05
+#define MSG_TRANSMITTER_PAIRED 0x06
+#define MSG_PAIRING_CONFIRMED  0x07
+#define MSG_DELETE_RECORD      0x08
+
+// Debug/monitoring (0x50-0x5F)
+#define MSG_DEBUG              0x50
+#define MSG_DEBUG_MONITOR_REQ  0x51
 
 // Common message structure (must match between transmitter and receiver)
 typedef struct __attribute__((packed)) struct_message {
@@ -25,7 +29,7 @@ typedef struct __attribute__((packed)) struct_message {
 
 // Beacon message structure
 typedef struct __attribute__((packed)) beacon_message {
-  uint8_t msgType;        // 0x07 = MSG_BEACON
+  uint8_t msgType;        // 0x04 = MSG_BEACON
   uint8_t receiverMAC[6];
   uint8_t availableSlots;
   uint8_t totalSlots;
@@ -33,20 +37,26 @@ typedef struct __attribute__((packed)) beacon_message {
 
 // Transmitter online message structure
 typedef struct __attribute__((packed)) transmitter_online_message {
-  uint8_t msgType;        // 0x09 = MSG_TRANSMITTER_ONLINE
+  uint8_t msgType;        // 0x05 = MSG_TRANSMITTER_ONLINE
   uint8_t transmitterMAC[6];
 } transmitter_online_message;
 
 // Transmitter paired message structure
 typedef struct __attribute__((packed)) transmitter_paired_message {
-  uint8_t msgType;        // 0x0A = MSG_TRANSMITTER_PAIRED
+  uint8_t msgType;        // 0x06 = MSG_TRANSMITTER_PAIRED
   uint8_t transmitterMAC[6];
   uint8_t receiverMAC[6];
 } transmitter_paired_message;
 
+// Pairing confirmed message structure (receiver tells transmitter "you're paired with me")
+typedef struct __attribute__((packed)) pairing_confirmed_message {
+  uint8_t msgType;        // 0x07 = MSG_PAIRING_CONFIRMED
+  uint8_t receiverMAC[6];
+} pairing_confirmed_message;
+
 // Debug message structure
 typedef struct __attribute__((packed)) debug_message {
-  uint8_t msgType;   // 0x04 = MSG_DEBUG
+  uint8_t msgType;        // 0x50 = MSG_DEBUG
   char message[200];
 } debug_message;
 
