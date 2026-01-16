@@ -90,7 +90,7 @@ void debugPrint(const char* format, ...) {
   
   // Send to debug monitor via ESP-NOW (if transport available)
   // Same message goes to both Serial and debug monitor for consistency
-  if (g_debugTransport) {
+  if (g_debugTransport && g_debugTransport->initialized) {
     debug_message debugMsg;
     debugMsg.msgType = MSG_DEBUG;
     
@@ -108,8 +108,16 @@ void debugPrint(const char* format, ...) {
     memcpy(debugMsg.message, buffer, len);
     debugMsg.message[len] = '\0';
     
+    // Small delay to ensure ESP-NOW stack is ready (especially after sending other messages)
+    yield();
+    delay(10);  // Additional delay to ensure ESP-NOW stack is ready for broadcast
+    
     uint8_t broadcastMAC[] = BROADCAST_MAC;
     espNowTransport_broadcast(g_debugTransport, (uint8_t*)&debugMsg, sizeof(debugMsg));
+    
+    // Small delay after broadcast to ensure it completes
+    yield();
+    delay(5);
   }
 }
 
@@ -190,6 +198,10 @@ void onPaired(const uint8_t* receiverMAC);
 void onActivity();
 uint8_t detectPedalMode();
 
+// Deferred debug message (to avoid calling debugPrint from ESP-NOW callback after sending)
+static bool hasPendingDebugMessage = false;
+static char pendingDebugMessage[200];
+
 void onPaired(const uint8_t* receiverMAC) {
   char macStr[18];
   snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -249,8 +261,35 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   if (msgType == MSG_PAIRING_CONFIRMED && len >= sizeof(pairing_confirmed_message)) {
     pairing_confirmed_message* confirm = (pairing_confirmed_message*)data;
     
-    // If we're not paired yet but receiver says we are, restore pairing state
-    if (!pairingState_isPaired(&pairingState)) {
+    // Check if we're already paired to a different receiver
+    if (pairingState_isPaired(&pairingState)) {
+      bool isPairedReceiver = macEqual(senderMAC, pairingState.pairedReceiverMAC);
+      
+      if (!isPairedReceiver) {
+        // Already paired to a different receiver - tell this receiver to delete our record
+        char senderMacStr[18];
+        char pairedMacStr[18];
+        snprintf(senderMacStr, sizeof(senderMacStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 senderMAC[0], senderMAC[1], senderMAC[2],
+                 senderMAC[3], senderMAC[4], senderMAC[5]);
+        snprintf(pairedMacStr, sizeof(pairedMacStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 pairingState.pairedReceiverMAC[0], pairingState.pairedReceiverMAC[1], pairingState.pairedReceiverMAC[2],
+                 pairingState.pairedReceiverMAC[3], pairingState.pairedReceiverMAC[4], pairingState.pairedReceiverMAC[5]);
+        debugPrint("Received MSG_PAIRING_CONFIRMED from different receiver (%s) - we're paired to %s - sending DELETE_RECORD",
+                   senderMacStr, pairedMacStr);
+        
+        espNowTransport_addPeer(&transport, senderMAC, channel);
+        delay(10);
+        sendDeleteRecordMessage(senderMAC);
+        return;  // Don't send ACK - we're rejecting this pairing
+      }
+      
+      // Same receiver - just ensure peer is added
+      espNowTransport_addPeer(&transport, senderMAC, channel);
+      delay(10);
+      debugPrint("Received MSG_PAIRING_CONFIRMED from paired receiver - peer confirmed");
+    } else {
+      // Not paired yet - restore pairing state with this receiver
       char macStr[18];
       snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                senderMAC[0], senderMAC[1], senderMAC[2],
@@ -270,28 +309,25 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
       preferences.end();
       
       debugPrint("Pairing restored - ready to send pedal events");
-    } else {
-      // Already paired - just ensure peer is added
-      espNowTransport_addPeer(&transport, senderMAC, channel);
-      delay(10);
-      debugPrint("Received MSG_PAIRING_CONFIRMED from paired receiver - peer confirmed");
     }
     
-    // Reply with MSG_PAIRING_CONFIRMED to acknowledge we received and accepted the pairing confirmation
+    // Reply with MSG_PAIRING_CONFIRMED_ACK to acknowledge we received and accepted the pairing confirmation
     // This lets the receiver know we're online and responsive
-    pairing_confirmed_message replyConfirm;
-    replyConfirm.msgType = MSG_PAIRING_CONFIRMED;
-    memcpy(replyConfirm.receiverMAC, senderMAC, 6);  // Send receiver's MAC back to confirm
+    pairing_confirmed_ack_message ackMsg;
+    ackMsg.msgType = MSG_PAIRING_CONFIRMED_ACK;
+    memcpy(ackMsg.receiverMAC, senderMAC, 6);  // Echo receiver's MAC to confirm
     
     espNowTransport_addPeer(&transport, senderMAC, channel);
     delay(10);  // Small delay to ensure peer is ready
-    bool sent = espNowTransport_send(&transport, senderMAC, (uint8_t*)&replyConfirm, sizeof(replyConfirm));
+    bool sent = espNowTransport_send(&transport, senderMAC, (uint8_t*)&ackMsg, sizeof(ackMsg));
     
+    // Defer debug message to main loop (can't reliably send ESP-NOW broadcast from callback after sending)
     if (sent) {
-      debugPrint("Sent MSG_PAIRING_CONFIRMED to acknowledge receiver's pairing confirmation");
+      snprintf(pendingDebugMessage, sizeof(pendingDebugMessage), "Sent MSG_PAIRING_CONFIRMED_ACK to acknowledge receiver's pairing confirmation");
     } else {
-      debugPrint("Failed to send MSG_PAIRING_CONFIRMED acknowledgment");
+      snprintf(pendingDebugMessage, sizeof(pendingDebugMessage), "Failed to send MSG_PAIRING_CONFIRMED_ACK acknowledgment");
     }
+    hasPendingDebugMessage = true;
     
     return;
   }
@@ -323,17 +359,20 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         espNowTransport_addPeer(&transport, senderMAC, channel);
         delay(10);  // Small delay to ensure peer is ready
         
-        // Reply with MSG_PAIRING_CONFIRMED to acknowledge we received and accepted the pairing confirmation
-        pairing_confirmed_message replyConfirm;
-        replyConfirm.msgType = MSG_PAIRING_CONFIRMED;
-        memcpy(replyConfirm.receiverMAC, senderMAC, 6);  // Send receiver's MAC back to confirm
+        // Reply with MSG_PAIRING_CONFIRMED_ACK to acknowledge we received and accepted the pairing confirmation
+        pairing_confirmed_ack_message ackMsg;
+        ackMsg.msgType = MSG_PAIRING_CONFIRMED_ACK;
+        memcpy(ackMsg.receiverMAC, senderMAC, 6);  // Echo receiver's MAC to confirm
         
-        bool sent = espNowTransport_send(&transport, senderMAC, (uint8_t*)&replyConfirm, sizeof(replyConfirm));
+        bool sent = espNowTransport_send(&transport, senderMAC, (uint8_t*)&ackMsg, sizeof(ackMsg));
+        
+        // Defer debug message to main loop (can't reliably send ESP-NOW broadcast from callback after sending)
         if (sent) {
-          debugPrint("Sent MSG_PAIRING_CONFIRMED to acknowledge receiver's pairing confirmation");
+          snprintf(pendingDebugMessage, sizeof(pendingDebugMessage), "Sent MSG_PAIRING_CONFIRMED_ACK to acknowledge receiver's pairing confirmation");
         } else {
-          debugPrint("Failed to send MSG_PAIRING_CONFIRMED acknowledgment");
+          snprintf(pendingDebugMessage, sizeof(pendingDebugMessage), "Failed to send MSG_PAIRING_CONFIRMED_ACK acknowledgment");
         }
+        hasPendingDebugMessage = true;
         
         // Reset activity timer since we're communicating
         onActivity();
@@ -655,7 +694,7 @@ void setup() {
   // Small delay to ensure ESP-NOW is fully ready
   delay(100);
   
-  // CRITICAL: If we restored pairing from NVS, add the peer now so pedal events can be sent
+  // CRITICAL: If we restored pairing from NVS, add the peer now
   if (pairingState_isPaired(&pairingState)) {
     bool peerAdded = espNowTransport_addPeer(&transport, pairingState.pairedReceiverMAC, 0);
     if (DEBUG_ENABLED) {
@@ -666,12 +705,29 @@ void setup() {
       }
     }
     delay(20);  // Delay to ensure peer is ready
+    
+    // If waking from deep sleep, send MSG_PAIRING_CONFIRMED to saved receiver
+    // This tells the receiver "I'm back online, do you still have a slot for me?"
+    if (wokeFromDeepSleep) {
+      pairing_confirmed_message confirmMsg;
+      confirmMsg.msgType = MSG_PAIRING_CONFIRMED;
+      memcpy(confirmMsg.receiverMAC, pairingState.pairedReceiverMAC, 6);
+      
+      bool sent = espNowTransport_send(&transport, pairingState.pairedReceiverMAC, (uint8_t*)&confirmMsg, sizeof(confirmMsg));
+      if (DEBUG_ENABLED) {
+        if (sent) {
+          debugPrint("Sent MSG_PAIRING_CONFIRMED to saved receiver (waking from deep sleep)");
+        } else {
+          debugPrint("Failed to send MSG_PAIRING_CONFIRMED to saved receiver");
+        }
+      }
+    }
+  } else {
+    // Not paired - broadcast that we're online (for discovery)
+    pairingService_broadcastOnline(&pairingService);
   }
   
-  // Broadcast that we're online (after ESP-NOW is fully initialized)
-  pairingService_broadcastOnline(&pairingService);
-  
-  // Additional delay to ensure broadcast completes before sending directed messages
+  // Additional delay to ensure messages complete
   delay(50);
   
   // CRITICAL: If woke from deep sleep and pedal is pressed, send pedal event immediately
@@ -740,6 +796,12 @@ void loop() {
   // Process any pending discovery requests (deferred from ESP-NOW callback)
   // This must be done in main loop, not in callback context
   pairingService_processPendingDiscovery(&pairingService);
+  
+  // Process any pending debug messages (deferred from ESP-NOW callback after sending)
+  if (hasPendingDebugMessage) {
+    hasPendingDebugMessage = false;
+    debugPrint("%s", pendingDebugMessage);
+  }
   
   // Check discovery timeout
   if (pairingService_checkDiscoveryTimeout(&pairingService, currentTime)) {

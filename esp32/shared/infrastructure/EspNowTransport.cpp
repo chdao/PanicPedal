@@ -77,7 +77,10 @@ void espNowTransport_broadcast(EspNowTransport* transport, const uint8_t* data, 
   esp_now_peer_info_t peerInfo;
   if (esp_now_get_peer(broadcastMAC, &peerInfo) != ESP_OK) {
     espNowTransport_addPeer(transport, broadcastMAC, 0);
+    // Small delay to ensure peer is ready
+    delay(5);
   }
   
+  // Send broadcast (no error checking here - failures are silent to avoid recursion in debug functions)
   espNowTransport_send(transport, broadcastMAC, data, len);
 }

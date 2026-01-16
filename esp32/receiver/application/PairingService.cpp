@@ -214,23 +214,20 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
                              macStr, isCurrentlyPaired ? "yes" : "no", currentSlots, MAX_PEDAL_SLOTS, slotsNeeded);
     }
     
-    // Send MSG_PAIRING_CONFIRMED to known transmitters:
-    // - If currently paired: DON'T send (they're already paired, MSG_TRANSMITTER_ONLINE is just an acknowledgment)
-    // - If not currently paired: send only if slots are available (they're coming back online)
+    // Send MSG_PAIRING_CONFIRMED to known transmitters when they send MSG_TRANSMITTER_ONLINE:
+    // - If currently paired: Always send (reconfirm pairing, transmitter will respond with MSG_PAIRING_CONFIRMED_ACK)
+    // - If not currently paired: Send only if slots are available (they're coming back online)
     bool shouldRespond = false;
     if (isCurrentlyPaired) {
-      // Currently paired transmitter - DON'T send MSG_PAIRING_CONFIRMED
-      // The MSG_TRANSMITTER_ONLINE is just an acknowledgment that they're online
-      // Sending MSG_PAIRING_CONFIRMED here would create a loop
+      // Currently paired transmitter - always send MSG_PAIRING_CONFIRMED to reconfirm pairing
+      // Transmitter will respond with MSG_PAIRING_CONFIRMED_ACK (no loop since it's a different message type)
+      shouldRespond = true;
       if (service->debugCallback) {
         char macStr[18];
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
-        service->debugCallback("Transmitter %s is already paired - MSG_TRANSMITTER_ONLINE acknowledged, no response needed", macStr);
+        service->debugCallback("Transmitter %s is already paired - sending MSG_PAIRING_CONFIRMED to reconfirm", macStr);
       }
-      // Just update last seen time
-      service->manager->transmitters[transmitterIndex].lastSeen = millis();
-      return;  // Don't send anything back
     } else {
       // NOT currently paired - check if slots available using SlotManager
       SlotAvailabilityResult result = slotManager_checkReconnection(service->manager, transmitterIndex, slotsNeeded);

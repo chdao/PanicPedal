@@ -13,6 +13,7 @@
 #define MSG_TRANSMITTER_ONLINE 0x05
 #define MSG_TRANSMITTER_PAIRED 0x06
 #define MSG_PAIRING_CONFIRMED  0x07
+#define MSG_PAIRING_CONFIRMED_ACK 0x09
 #define MSG_DELETE_RECORD      0x08
 
 // Debug/monitoring (0x50-0x5F)
@@ -53,6 +54,12 @@ typedef struct __attribute__((packed)) pairing_confirmed_message {
   uint8_t msgType;        // 0x07 = MSG_PAIRING_CONFIRMED
   uint8_t receiverMAC[6];
 } pairing_confirmed_message;
+
+// Pairing confirmed acknowledgment message structure (transmitter acknowledges receiver's MSG_PAIRING_CONFIRMED)
+typedef struct __attribute__((packed)) pairing_confirmed_ack_message {
+  uint8_t msgType;        // 0x09 = MSG_PAIRING_CONFIRMED_ACK
+  uint8_t receiverMAC[6];  // Echo receiver's MAC to confirm
+} pairing_confirmed_ack_message;
 
 // Debug message structure
 typedef struct __attribute__((packed)) debug_message {

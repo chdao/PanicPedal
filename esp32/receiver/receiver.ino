@@ -82,10 +82,63 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     }
   }
   
-  // Handle pairing confirmed message from transmitter (acknowledgment that it received our MSG_PAIRING_CONFIRMED)
+  // Handle pairing confirmed message from transmitter (requesting reconnection after deep sleep)
   if (len >= sizeof(pairing_confirmed_message)) {
     pairing_confirmed_message* confirm = (pairing_confirmed_message*)data;
     if (confirm->msgType == MSG_PAIRING_CONFIRMED) {
+      int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
+      if (transmitterIndex >= 0) {
+        // Known transmitter requesting reconnection - check if we can accept it
+        int slotsNeeded = getSlotsNeeded(transmitterManager.transmitters[transmitterIndex].pedalMode);
+        bool isCurrentlyPaired = transmitterManager.transmitters[transmitterIndex].seenOnBoot;
+        
+        bool shouldRespond = false;
+        if (isCurrentlyPaired) {
+          // Currently paired - always accept (reclaiming own slots)
+          shouldRespond = true;
+          debugMonitor_print(&debugMonitor, "Known transmitter %d (currently paired) requesting reconnection - sending MSG_PAIRING_CONFIRMED", transmitterIndex);
+        } else {
+          // Not currently paired - check if slots available
+          SlotAvailabilityResult result = slotManager_checkReconnection(&transmitterManager, transmitterIndex, slotsNeeded);
+          if (result.canFit) {
+            shouldRespond = true;
+            debugMonitor_print(&debugMonitor, "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED", transmitterIndex);
+          } else {
+            debugMonitor_print(&debugMonitor, "Known transmitter %d requesting reconnection - slots full (%d + %d > %d), not responding", 
+                             transmitterIndex, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
+          }
+        }
+        
+        if (shouldRespond) {
+          // Send MSG_PAIRING_CONFIRMED back to confirm we accept the reconnection
+          receiverEspNowTransport_addPeer(&transport, senderMAC, channel);
+          pairing_confirmed_message replyConfirm;
+          replyConfirm.msgType = MSG_PAIRING_CONFIRMED;
+          WiFi.macAddress(replyConfirm.receiverMAC);
+          
+          bool sent = receiverEspNowTransport_send(&transport, senderMAC, (uint8_t*)&replyConfirm, sizeof(replyConfirm));
+          if (sent) {
+            // Mark as seen after successful send
+            transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
+            transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
+            invalidateSlotCache();
+            debugMonitor_print(&debugMonitor, "Sent MSG_PAIRING_CONFIRMED to known transmitter %d (reconnection accepted)", transmitterIndex);
+          }
+        } else {
+          // Just update last seen time even if we can't accept
+          transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
+        }
+      } else {
+        debugMonitor_print(&debugMonitor, "Received MSG_PAIRING_CONFIRMED from unknown transmitter");
+      }
+      return;  // Don't process further - this is handled
+    }
+  }
+  
+  // Handle pairing confirmed acknowledgment from transmitter (acknowledgment that it received our MSG_PAIRING_CONFIRMED)
+  if (len >= sizeof(pairing_confirmed_ack_message)) {
+    pairing_confirmed_ack_message* ack = (pairing_confirmed_ack_message*)data;
+    if (ack->msgType == MSG_PAIRING_CONFIRMED_ACK) {
       int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
       if (transmitterIndex >= 0) {
         // Known transmitter acknowledging our MSG_PAIRING_CONFIRMED - mark as seen
@@ -99,7 +152,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
           transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
         }
       } else {
-        debugMonitor_print(&debugMonitor, "Received MSG_PAIRING_CONFIRMED from unknown transmitter");
+        debugMonitor_print(&debugMonitor, "Received MSG_PAIRING_CONFIRMED_ACK from unknown transmitter");
       }
       return;  // Don't process further - this is handled
     }
