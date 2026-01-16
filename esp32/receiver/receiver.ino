@@ -96,13 +96,13 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         if (isCurrentlyPaired) {
           // Currently paired - always accept (reclaiming own slots)
           shouldRespond = true;
-          debugMonitor_print(&debugMonitor, "Known transmitter %d (currently paired) requesting reconnection - sending MSG_PAIRING_CONFIRMED", transmitterIndex);
+          debugMonitor_print(&debugMonitor, "Known transmitter %d (currently paired) requesting reconnection - sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
         } else {
           // Not currently paired - check if slots available
           SlotAvailabilityResult result = slotManager_checkReconnection(&transmitterManager, transmitterIndex, slotsNeeded);
           if (result.canFit) {
             shouldRespond = true;
-            debugMonitor_print(&debugMonitor, "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED", transmitterIndex);
+            debugMonitor_print(&debugMonitor, "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
           } else {
             debugMonitor_print(&debugMonitor, "Known transmitter %d requesting reconnection - slots full (%d + %d > %d), not responding", 
                              transmitterIndex, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
@@ -110,19 +110,19 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         }
         
         if (shouldRespond) {
-          // Send MSG_PAIRING_CONFIRMED back to confirm we accept the reconnection
+          // Send MSG_PAIRING_CONFIRMED_ACK to acknowledge the reconnection request and confirm pairing
           receiverEspNowTransport_addPeer(&transport, senderMAC, channel);
-          pairing_confirmed_message replyConfirm;
-          replyConfirm.msgType = MSG_PAIRING_CONFIRMED;
-          WiFi.macAddress(replyConfirm.receiverMAC);
+          pairing_confirmed_ack_message ackMsg;
+          ackMsg.msgType = MSG_PAIRING_CONFIRMED_ACK;
+          WiFi.macAddress(ackMsg.receiverMAC);
           
-          bool sent = receiverEspNowTransport_send(&transport, senderMAC, (uint8_t*)&replyConfirm, sizeof(replyConfirm));
+          bool sent = receiverEspNowTransport_send(&transport, senderMAC, (uint8_t*)&ackMsg, sizeof(ackMsg));
           if (sent) {
             // Mark as seen after successful send
             transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
             transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
             invalidateSlotCache();
-            debugMonitor_print(&debugMonitor, "Sent MSG_PAIRING_CONFIRMED to known transmitter %d (reconnection accepted)", transmitterIndex);
+            debugMonitor_print(&debugMonitor, "Sent MSG_PAIRING_CONFIRMED_ACK to known transmitter %d (reconnection accepted)", transmitterIndex);
           }
         } else {
           // Just update last seen time even if we can't accept

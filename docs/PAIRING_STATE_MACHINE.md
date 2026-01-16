@@ -222,15 +222,14 @@ Transmitter                    Receiver
      │                             │
      │── MSG_PAIRING_CONFIRMED ───>│ (on wake from deep sleep, to saved receiver)
      │                             │
-     │<── MSG_PAIRING_CONFIRMED ───│ (receiver confirms pairing is still valid)
+     │<── MSG_PAIRING_CONFIRMED_ACK│ (receiver acknowledges and confirms pairing)
      │                             │
-     │── MSG_PAIRING_CONFIRMED_ACK─>│ (transmitter acknowledges)
-     │                             │
+     │── Pairing restored          │
      │── MSG_PEDAL_EVENT ──────────>│ (immediately if pedal pressed)
      │                             │
 ```
 
-**Note:** Transmitter sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast). If receiver has slots available or transmitter is currently paired, receiver responds with `MSG_PAIRING_CONFIRMED`. Transmitter then replies with `MSG_PAIRING_CONFIRMED_ACK`.
+**Note:** Transmitter sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast). If receiver has slots available or transmitter is currently paired, receiver responds with `MSG_PAIRING_CONFIRMED_ACK` to acknowledge the request and confirm pairing. Transmitter restores pairing state and does not send another message.
 
 ### Receiver Boot - Known Transmitter Reconnection
 
@@ -356,10 +355,10 @@ The receiver checks slot availability in these scenarios:
 - Loads paired receiver MAC from NVS
 - Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast) - requests reconnection
 - If pedal pressed on wake, sends pedal event immediately (after pairing is restored)
-- Receiver responds with `MSG_PAIRING_CONFIRMED` if:
+- Receiver responds with `MSG_PAIRING_CONFIRMED_ACK` if:
   - Transmitter is currently paired (always responds to reconfirm)
   - Transmitter is not currently paired but slots are available
-- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED` → Replies with `MSG_PAIRING_CONFIRMED_ACK`
+- Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` (no further message sent)
 - If receiver doesn't respond (slots full and not currently paired), transmitter remains unpaired until next opportunity
 - If transmitter receives `MSG_PAIRING_CONFIRMED` from different receiver, sends `MSG_DELETE_RECORD` to that receiver
 
