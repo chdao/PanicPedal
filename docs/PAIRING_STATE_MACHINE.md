@@ -20,7 +20,7 @@ The system consists of:
   - Sent by transmitter to acknowledge it received and accepted the receiver's `MSG_PAIRING_CONFIRMED`
   - Prevents message loops (different from MSG_PAIRING_CONFIRMED)
 - **MSG_ALIVE**: Now only used to request discovery from unknown transmitters during grace period
-- **MSG_TRANSMITTER_ONLINE**: Only sent when transmitter comes online (boot or reset), not as a response to `MSG_PAIRING_CONFIRMED`
+- **MSG_ONLINE** (0x05): Generic online message sent by any device type (transmitter, receiver, or debug monitor) when they come online. Contains `deviceType` field to identify the sender. Transmitters send this on boot/reset (if no MAC saved) or as fallback after `MSG_PAIRING_CONFIRMED` timeout. Receivers send this on boot to announce availability. Debug monitors respond to this message to announce their presence.
 - **Initial Ping Wait**: 1-second period after `MSG_PAIRING_CONFIRMED` is sent where receiver waits for transmitters to respond before starting grace period
 - **LED States**:
   - **GREEN** (solid): During initial 1-second wait after ping sent
@@ -58,7 +58,7 @@ The system consists of:
 - Pairing cleared/reset
 
 **Behaviors:**
-- Broadcasts `MSG_TRANSMITTER_ONLINE` (only when no MAC saved, for discovery)
+- Broadcasts `MSG_ONLINE` (only when no MAC saved, for discovery)
 - Listens for `MSG_BEACON` or `MSG_ALIVE` from receivers
 - Does not send pedal events
 
@@ -106,13 +106,13 @@ The system consists of:
 
 **Behaviors:**
 - Sends `MSG_PEDAL_EVENT` on pedal press/release
-- Responds to `MSG_ALIVE` from paired receiver by sending `MSG_TRANSMITTER_ONLINE` (deferred to main loop)
+- Responds to `MSG_ALIVE` from paired receiver by sending `MSG_ONLINE` (deferred to main loop)
 - Responds to `MSG_ALIVE` from different receiver by sending `MSG_DELETE_RECORD`
 - Sends `MSG_DELETE_RECORD` to other receivers if they request pairing
 - Can enter deep sleep (preserves pairing in NVS)
 - On wake from deep sleep: Sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast)
-- On boot/reset: Only broadcasts `MSG_TRANSMITTER_ONLINE` if no MAC saved (for discovery)
-- If `MSG_PAIRING_CONFIRMED` sent and no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second: Broadcasts `MSG_TRANSMITTER_ONLINE` (fallback to discovery)
+- On boot/reset: Only broadcasts `MSG_ONLINE` if no MAC saved (for discovery)
+- If `MSG_PAIRING_CONFIRMED` sent and no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second: Broadcasts `MSG_ONLINE` (fallback to discovery)
 
 **Transitions:**
 - `MSG_PAIRING_CONFIRMED` received from paired receiver → Confirm pairing → Reply with `MSG_PAIRING_CONFIRMED_ACK`
@@ -121,8 +121,8 @@ The system consists of:
 - `MSG_PAIRING_CONFIRMED_ACK` received → Clear waiting flag → Restore pairing state if needed
 - Deep sleep → Pairing saved to NVS
 - Wake from deep sleep → Load pairing from NVS → Send `MSG_PAIRING_CONFIRMED` to saved receiver → Wait for ACK (1s timeout)
-- If `MSG_PAIRING_CONFIRMED` timeout (no ACK within 1s) → Broadcast `MSG_TRANSMITTER_ONLINE` for discovery
-- Reset → Clear pairing → Return to UNPAIRED → Broadcast `MSG_TRANSMITTER_ONLINE` (no MAC saved)
+- If `MSG_PAIRING_CONFIRMED` timeout (no ACK within 1s) → Broadcast `MSG_ONLINE` for discovery
+- Reset → Clear pairing → Return to UNPAIRED → Broadcast `MSG_ONLINE` (no MAC saved)
 
 ### Receiver: BOOT State
 
@@ -135,10 +135,11 @@ The system consists of:
 - Sends `MSG_PAIRING_CONFIRMED` to all previously known transmitters that are NOT currently paired (`seenOnBoot = false`)
 - Records `initialPingTime` when ping is actually sent (after ESP-NOW initialization)
 - This happens BEFORE grace period starts, giving known transmitters priority
+- Broadcasts `MSG_ONLINE` to announce receiver is online (debug monitors will respond)
 - LED indicator: **GREEN** (solid) during initial wait period
 - Waits `INITIAL_PING_WAIT_MS` (1 second) from `initialPingTime` before checking responses
 - After wait: Checks if any known transmitters responded (by checking `seenOnBoot` flag)
-  - If none responded: Logs "No known pedals replied to initial ping - preserving loaded transmitters"
+  - If none responded: Logs "No known pedals replied to initial ping - preserving loaded transmitters" or "No known pedals loaded - ready for new pairings"
   - If slots fill immediately: Bypasses grace period entirely
 
 **Transitions:**
@@ -182,18 +183,23 @@ The system consists of:
 - Handles `MSG_PAIRING_CONFIRMED_ACK` from transmitters (acknowledgment that they received our pairing confirmation):
   - Marks transmitter as `seenOnBoot = true` when `MSG_PAIRING_CONFIRMED_ACK` is received
   - Updates `lastSeen` time
-- Sends `MSG_PAIRING_CONFIRMED` to known transmitters that send `MSG_TRANSMITTER_ONLINE`:
+- Sends `MSG_PAIRING_CONFIRMED` to known transmitters that send `MSG_ONLINE`:
   - If currently paired (`seenOnBoot = true`): Always sends `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
   - If not currently paired but slots available: Sends `MSG_PAIRING_CONFIRMED`
   - If not currently paired and slots full: Does not respond
+- Handles `MSG_ONLINE` from unknown transmitters:
+  - If slots available: Sends `MSG_ALIVE` to request discovery
+  - If slots full: Does not respond
 - Marks transmitters as `seenOnBoot = true` when they send pedal events
 - LED indicator: **OFF**
 - Can replace unresponsive transmitters if slots full
 
 **Transitions:**
-- `MSG_TRANSMITTER_ONLINE` from known transmitter (currently paired) → Always send `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
-- `MSG_TRANSMITTER_ONLINE` from known transmitter (not currently paired) → Check slots → Send `MSG_PAIRING_CONFIRMED` if available
-- `MSG_TRANSMITTER_ONLINE` from unknown → Check slots → Send `MSG_ALIVE` to request discovery if available
+- `MSG_ONLINE` from known transmitter (currently paired) → Always send `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
+- `MSG_ONLINE` from known transmitter (not currently paired) → Check slots → Send `MSG_PAIRING_CONFIRMED` if available
+- `MSG_ONLINE` from unknown transmitter → Check slots → Send `MSG_ALIVE` to request discovery if available
+- `MSG_ONLINE` from receiver → Ignore (receivers don't talk to each other)
+- `MSG_ONLINE` from debug monitor → Store debug monitor MAC for debug message routing
 - `MSG_PAIRING_CONFIRMED` from known transmitter → Check slots → Send `MSG_PAIRING_CONFIRMED` back if available
 - `MSG_PAIRING_CONFIRMED_ACK` from known transmitter → Mark as `seenOnBoot = true` (acknowledgment received)
 - `MSG_PEDAL_EVENT` from known transmitter → Mark as `seenOnBoot = true`
@@ -206,7 +212,7 @@ The system consists of:
 ```
 Transmitter                    Receiver
      │                             │
-     │── MSG_TRANSMITTER_ONLINE ──>│
+     │── MSG_ONLINE ──────────────>│ (broadcast, deviceType=TRANSMITTER)
      │                             │
      │<── MSG_BEACON ──────────────│
      │                             │
@@ -241,7 +247,7 @@ Transmitter                    Receiver
      │── [waiting for ACK, 1s timeout]
      │                             │
      │── [No ACK received]         │
-     │── MSG_TRANSMITTER_ONLINE ──>│ (broadcast, fallback to discovery)
+     │── MSG_ONLINE ───────────────>│ (broadcast, deviceType=TRANSMITTER, fallback to discovery)
      │                             │
 ```
 
@@ -249,8 +255,8 @@ Transmitter                    Receiver
 - Transmitter sends `MSG_PAIRING_CONFIRMED` directly to saved receiver (not broadcast). 
 - If receiver has slots available or transmitter is currently paired, receiver responds with `MSG_PAIRING_CONFIRMED_ACK` within 1 second.
 - Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` and clears waiting flag.
-- **If no ACK received within 1 second**: Transmitter broadcasts `MSG_TRANSMITTER_ONLINE` as fallback to discovery mode.
-- If no MAC saved on wake: Transmitter broadcasts `MSG_TRANSMITTER_ONLINE` immediately for discovery.
+- **If no ACK received within 1 second**: Transmitter broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER) as fallback to discovery mode.
+- If no MAC saved on wake: Transmitter broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER) immediately for discovery.
 
 ### Receiver Boot - Known Transmitter Reconnection
 
@@ -353,7 +359,7 @@ The receiver checks slot availability in these scenarios:
 ### Slot Full
 - Receiver rejects discovery requests if slots full
 - Exception: Known transmitters reclaiming their slots (always allowed)
-- Receiver does not respond to `MSG_PAIRING_CONFIRMED` or `MSG_TRANSMITTER_ONLINE` from known transmitters if slots full and transmitter is not currently paired
+- Receiver does not respond to `MSG_PAIRING_CONFIRMED` or `MSG_ONLINE` from known transmitters if slots full and transmitter is not currently paired
 
 ### Different Receiver Pairing Attempt
 - If transmitter receives `MSG_PAIRING_CONFIRMED` from a different receiver while already paired:
@@ -381,10 +387,10 @@ The receiver checks slot availability in these scenarios:
   - Transmitter is currently paired (always responds to reconfirm)
   - Transmitter is not currently paired but slots are available
 - Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` (clears waiting flag, no further message sent)
-- **If no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second**: Broadcasts `MSG_TRANSMITTER_ONLINE` (fallback to discovery mode)
-- If receiver doesn't respond (slots full and not currently paired), transmitter broadcasts `MSG_TRANSMITTER_ONLINE` after timeout
+- **If no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second**: Broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER, fallback to discovery mode)
+- If receiver doesn't respond (slots full and not currently paired), transmitter broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER) after timeout
 - If transmitter receives `MSG_PAIRING_CONFIRMED` from different receiver, sends `MSG_DELETE_RECORD` to that receiver
-- If no MAC saved: Broadcasts `MSG_TRANSMITTER_ONLINE` immediately (for discovery)
+- If no MAC saved: Broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER) immediately (for discovery)
 
 ## Configuration
 
