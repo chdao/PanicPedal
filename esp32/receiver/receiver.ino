@@ -11,7 +11,7 @@
 #include "infrastructure/EspNowTransport.h"
 #include "infrastructure/Persistence.h"
 #include "infrastructure/LEDService.h"
-#include "infrastructure/DebugMonitor.h"
+#include "../shared/infrastructure/DebugService.h"
 #include "application/PairingService.h"
 #include "application/KeyboardService.h"
 
@@ -19,7 +19,6 @@
 TransmitterManager transmitterManager;
 ReceiverEspNowTransport transport;
 LEDService ledService;
-DebugMonitor debugMonitor;
 
 // Application layer instances
 ReceiverPairingService pairingService;
@@ -43,6 +42,21 @@ static void invalidateSlotCache() {
 // Forward declaration
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel);
 
+// Wrapper functions for DebugService (receiver uses ReceiverEspNowTransport, not EspNowTransport)
+// Wrapper functions for DebugService (receiver uses ReceiverEspNowTransport, not EspNowTransport)
+// These are needed because DebugService expects EspNowTransport, but receiver uses ReceiverEspNowTransport
+static bool receiverEspNowTransport_send_wrapper(const uint8_t* mac, const uint8_t* data, int len) {
+  return receiverEspNowTransport_send(&transport, mac, data, len);
+}
+
+static bool receiverEspNowTransport_addPeer_wrapper(const uint8_t* mac, uint8_t channel) {
+  return receiverEspNowTransport_addPeer(&transport, mac, channel);
+}
+
+static bool receiverEspNowTransport_isInitialized_wrapper() {
+  return transport.initialized;
+}
+
 // Wrapper function for debug callback
 void pairingServiceDebugCallback(const char* format, ...) {
   va_list args;
@@ -50,32 +64,44 @@ void pairingServiceDebugCallback(const char* format, ...) {
   char buffer[256];
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
-  debugMonitor_print(&debugMonitor, "%s", buffer);
+  DebugService::print("%s", buffer);
 }
 
 void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel) {
-  if (len < 1) return;
+  if (len < 2) return;  // Need at least deviceType + msgType
   
-  uint8_t msgType = data[0];
+  uint8_t deviceType = data[0];  // First byte is deviceType
+  uint8_t msgType = data[1];     // Second byte is msgType
   
-  // Handle debug monitor discovery request
-  if (msgType == MSG_DEBUG_MONITOR_REQ) {
-    debugMonitor_handleDiscoveryRequest(&debugMonitor, senderMAC, channel);
-    
-    // Send immediate confirmation that pairing succeeded
-    debugMonitor_print(&debugMonitor, "Debug monitor discovery request received and processed");
+  // Handle debug monitor discovery request FIRST (before filtering by device type)
+  // This allows debug monitors to respond to MSG_ONLINE broadcasts
+  if (msgType == MSG_DEBUG_MONITOR_REQ && len >= sizeof(debug_monitor_req_message)) {
+    debug_monitor_req_message* req = (debug_monitor_req_message*)data;
+    // Only process if it's from a debug monitor (not from another receiver/transmitter)
+    if (req->deviceType == DEVICE_TYPE_DEBUG_MONITOR) {
+      DebugService::handleDebugMonitorDiscovery(senderMAC);
+      
+      // Send immediate confirmation that pairing succeeded
+      DebugService::print("Debug monitor discovery request received and processed");
+    }
     return;
   }
   
-  // Handle transmitter online broadcast (only when transmitter comes online, not as response to MSG_PAIRING_CONFIRMED)
-  if (len >= sizeof(transmitter_online_message)) {
-    transmitter_online_message* onlineMsg = (transmitter_online_message*)data;
-    if (onlineMsg->msgType == MSG_TRANSMITTER_ONLINE) {
+  // Only process messages from transmitters (ignore messages from receivers and debug monitors)
+  if (deviceType != DEVICE_TYPE_TRANSMITTER) {
+    return;  // Ignore messages from non-transmitters
+  }
+  
+  // Handle online message from transmitters (only when transmitter comes online, not as response to MSG_PAIRING_CONFIRMED)
+  if (len >= sizeof(online_message)) {
+    online_message* onlineMsg = (online_message*)data;
+    // Only process if it's from a transmitter (check deviceType)
+    if (onlineMsg->deviceType == DEVICE_TYPE_TRANSMITTER && onlineMsg->msgType == MSG_ONLINE) {
       int index = transmitterManager_findIndex(&transmitterManager, senderMAC);
       if (index >= 0) {
-        debugMonitor_print(&debugMonitor, "Received MSG_TRANSMITTER_ONLINE from known transmitter %d", index);
+        DebugService::print("Received MSG_ONLINE from known transmitter %d", index);
       } else {
-        debugMonitor_print(&debugMonitor, "Received MSG_TRANSMITTER_ONLINE from unknown transmitter");
+        DebugService::print( "Received MSG_ONLINE from unknown transmitter");
       }
       receiverPairingService_handleTransmitterOnline(&pairingService, senderMAC, channel);
       return;
@@ -85,7 +111,8 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   // Handle pairing confirmed message from transmitter (requesting reconnection after deep sleep)
   if (len >= sizeof(pairing_confirmed_message)) {
     pairing_confirmed_message* confirm = (pairing_confirmed_message*)data;
-    if (confirm->msgType == MSG_PAIRING_CONFIRMED) {
+    // Only process if it's from a transmitter (check deviceType)
+    if (confirm->deviceType == DEVICE_TYPE_TRANSMITTER && confirm->msgType == MSG_PAIRING_CONFIRMED) {
       int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
       if (transmitterIndex >= 0) {
         // Known transmitter requesting reconnection - check if we can accept it
@@ -96,15 +123,15 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         if (isCurrentlyPaired) {
           // Currently paired - always accept (reclaiming own slots)
           shouldRespond = true;
-          debugMonitor_print(&debugMonitor, "Known transmitter %d (currently paired) requesting reconnection - sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
+          DebugService::print( "Known transmitter %d (currently paired) requesting reconnection - sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
         } else {
           // Not currently paired - check if slots available
           SlotAvailabilityResult result = slotManager_checkReconnection(&transmitterManager, transmitterIndex, slotsNeeded);
           if (result.canFit) {
             shouldRespond = true;
-            debugMonitor_print(&debugMonitor, "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
+            DebugService::print( "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
           } else {
-            debugMonitor_print(&debugMonitor, "Known transmitter %d requesting reconnection - slots full (%d + %d > %d), not responding", 
+            DebugService::print( "Known transmitter %d requesting reconnection - slots full (%d + %d > %d), not responding", 
                              transmitterIndex, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
           }
         }
@@ -113,6 +140,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
           // Send MSG_PAIRING_CONFIRMED_ACK to acknowledge the reconnection request and confirm pairing
           receiverEspNowTransport_addPeer(&transport, senderMAC, channel);
           pairing_confirmed_ack_message ackMsg;
+          ackMsg.deviceType = DEVICE_TYPE_RECEIVER;
           ackMsg.msgType = MSG_PAIRING_CONFIRMED_ACK;
           WiFi.macAddress(ackMsg.receiverMAC);
           
@@ -122,14 +150,14 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
             transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
             transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
             invalidateSlotCache();
-            debugMonitor_print(&debugMonitor, "Sent MSG_PAIRING_CONFIRMED_ACK to known transmitter %d (reconnection accepted)", transmitterIndex);
+            DebugService::print( "Sent MSG_PAIRING_CONFIRMED_ACK to known transmitter %d (reconnection accepted)", transmitterIndex);
           }
         } else {
           // Just update last seen time even if we can't accept
           transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
         }
       } else {
-        debugMonitor_print(&debugMonitor, "Received MSG_PAIRING_CONFIRMED from unknown transmitter");
+        DebugService::print( "Received MSG_PAIRING_CONFIRMED from unknown transmitter");
       }
       return;  // Don't process further - this is handled
     }
@@ -138,21 +166,22 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   // Handle pairing confirmed acknowledgment from transmitter (acknowledgment that it received our MSG_PAIRING_CONFIRMED)
   if (len >= sizeof(pairing_confirmed_ack_message)) {
     pairing_confirmed_ack_message* ack = (pairing_confirmed_ack_message*)data;
-    if (ack->msgType == MSG_PAIRING_CONFIRMED_ACK) {
+    // Only process if it's from a transmitter (check deviceType)
+    if (ack->deviceType == DEVICE_TYPE_TRANSMITTER && ack->msgType == MSG_PAIRING_CONFIRMED_ACK) {
       int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
       if (transmitterIndex >= 0) {
         // Known transmitter acknowledging our MSG_PAIRING_CONFIRMED - mark as seen
         if (!transmitterManager.transmitters[transmitterIndex].seenOnBoot) {
           transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
           transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
-          debugMonitor_print(&debugMonitor, "Known transmitter %d acknowledged MSG_PAIRING_CONFIRMED - marking as paired", transmitterIndex);
+          DebugService::print( "Known transmitter %d acknowledged MSG_PAIRING_CONFIRMED - marking as paired", transmitterIndex);
           invalidateSlotCache();  // Invalidate cache when transmitter becomes responsive
         } else {
           // Already marked as seen - just update last seen time
           transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
         }
       } else {
-        debugMonitor_print(&debugMonitor, "Received MSG_PAIRING_CONFIRMED_ACK from unknown transmitter");
+        DebugService::print( "Received MSG_PAIRING_CONFIRMED_ACK from unknown transmitter");
       }
       return;  // Don't process further - this is handled
     }
@@ -162,7 +191,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
   if (len >= sizeof(transmitter_paired_message)) {
     transmitter_paired_message* pairedMsg = (transmitter_paired_message*)data;
     if (pairedMsg->msgType == MSG_TRANSMITTER_PAIRED) {
-      debugMonitor_print(&debugMonitor, "Received MSG_TRANSMITTER_PAIRED");
+      DebugService::print( "Received MSG_TRANSMITTER_PAIRED");
       receiverPairingService_handleTransmitterPaired(&pairingService, pairedMsg);
       return;
     }
@@ -177,7 +206,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     case MSG_DELETE_RECORD: {
       int index = transmitterManager_findIndex(&transmitterManager, senderMAC);
       if (index >= 0) {
-        debugMonitor_print(&debugMonitor, "Received delete record request from transmitter %d - removing", index);
+        DebugService::print( "Received delete record request from transmitter %d - removing", index);
         transmitterManager_remove(&transmitterManager, index);
         persistence_save(&transmitterManager);
         invalidateSlotCache();  // Invalidate cache when transmitter removed
@@ -186,7 +215,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     }
     
     case MSG_DISCOVERY_REQ: {
-      debugMonitor_print(&debugMonitor, "Discovery request from %02X:%02X:%02X:%02X:%02X:%02X (mode=%d)",
+      DebugService::print( "Discovery request from %02X:%02X:%02X:%02X:%02X:%02X (mode=%d)",
                          senderMAC[0], senderMAC[1], senderMAC[2], senderMAC[3], senderMAC[4], senderMAC[5], msg->pedalMode);
       receiverPairingService_handleDiscoveryRequest(&pairingService, senderMAC, msg->pedalMode, channel, millis());
       persistence_save(&transmitterManager);
@@ -206,17 +235,17 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
         if (inGracePeriod && !pairingService.gracePeriodSkipped) {
           // Unknown transmitter sending pedal events during grace period - request discovery
           receiverEspNowTransport_addPeer(&transport, senderMAC, channel);
-          struct_message alive = {MSG_ALIVE, 0, false, 0};
+          struct_message alive = {DEVICE_TYPE_RECEIVER, MSG_ALIVE, 0, false, 0};
           receiverEspNowTransport_send(&transport, senderMAC, (uint8_t*)&alive, sizeof(alive));
           
-          debugMonitor_print(&debugMonitor, "Unknown transmitter sent pedal event during grace period - requesting discovery");
+          DebugService::print( "Unknown transmitter sent pedal event during grace period - requesting discovery");
         }
       } else {
         // Known transmitter - mark as seen (it's responding after receiving MSG_PAIRING_CONFIRMED)
         if (!transmitterManager.transmitters[transmitterIndex].seenOnBoot) {
           transmitterManager.transmitters[transmitterIndex].seenOnBoot = true;
           transmitterManager.transmitters[transmitterIndex].lastSeen = millis();
-          debugMonitor_print(&debugMonitor, "Known transmitter %d responded with pedal event - marking as paired", transmitterIndex);
+          DebugService::print( "Known transmitter %d responded with pedal event - marking as paired", transmitterIndex);
         }
         
         // Handle pedal event normally
@@ -227,7 +256,7 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
           keyToPress = transmitterManager_getAssignedKey(&transmitterManager, transmitterIndex);
         }
         // Use standardized pedal event format: T%d: '%c' ▼/▲
-        debugMonitor_print(&debugMonitor, "T%d: '%c' %s", 
+        DebugService::print( "T%d: '%c' %s", 
                           transmitterIndex, keyToPress, msg->pressed ? "▼" : "▲");
       }
       
@@ -245,17 +274,119 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
 void setup() {
   bootTime = millis();
   
+  // Check if boot button is pressed (GPIO 0, typically pulled HIGH, LOW when pressed)
+  // Wait a bit to allow button press to register
+  delay(100);
+  pinMode(0, INPUT_PULLUP);
+  delay(50);
+  
   // Initialize domain layer
   transmitterManager_init(&transmitterManager);
   
   // Initialize infrastructure layer first (needed for debug monitor)
   receiverEspNowTransport_init(&transport);
-  debugMonitor_init(&debugMonitor, &transport, bootTime);
-  debugMonitor_load(&debugMonitor);
-  debugMonitor.espNowInitialized = true;
   
-  // Load persisted state
-  persistence_load(&transmitterManager);
+  // Initialize DebugService with function pointers for receiver transport
+  DebugService::init(
+    receiverEspNowTransport_send_wrapper,
+    receiverEspNowTransport_addPeer_wrapper,
+    receiverEspNowTransport_isInitialized_wrapper
+  );
+  DebugService::setDeviceType(DEVICE_TYPE_RECEIVER);  // Set device type to receiver
+  DebugService::setEnabled(true);
+  
+  // Load debug monitor pairing from persistence and notify DebugService
+  uint8_t savedMonitorMAC[6] = {0};
+  bool monitorPaired = false;
+  persistence_loadDebugMonitor(savedMonitorMAC, &monitorPaired);
+  if (monitorPaired && !macIsZero(savedMonitorMAC)) {
+    DebugService::handleDebugMonitorDiscovery(savedMonitorMAC);
+  }
+  
+  // Check if boot button is initially pressed
+  bool buttonInitiallyPressed = (digitalRead(0) == LOW);
+  
+  // If button is initially pressed, wait 2 seconds and check if still held
+  bool bootButtonHeldFor2s = false;
+  if (buttonInitiallyPressed) {
+    unsigned long buttonCheckStart = millis();
+    const unsigned long HOLD_TIME_MS = 2000;  // 2 seconds
+    
+    // Blink LED rapidly while waiting (if available)
+    #ifdef LED_PIN
+    if (LED_PIN != 255) {
+      pinMode(LED_PIN, OUTPUT);
+    }
+    #endif
+    
+    // Check button state continuously for 2 seconds
+    while ((millis() - buttonCheckStart) < HOLD_TIME_MS) {
+      // Blink LED rapidly to indicate waiting for hold
+      #ifdef LED_PIN
+      if (LED_PIN != 255) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(50);
+        digitalWrite(LED_PIN, LOW);
+        delay(50);
+      }
+      #endif
+      
+      // Check if button is still pressed
+      if (digitalRead(0) != LOW) {
+        // Button released before 2 seconds - abort
+        bootButtonHeldFor2s = false;
+        break;
+      }
+    }
+    
+    // If we got here and button is still pressed, it was held for 2 seconds
+    if ((millis() - buttonCheckStart) >= HOLD_TIME_MS && digitalRead(0) == LOW) {
+      bootButtonHeldFor2s = true;
+    }
+  }
+  
+  // If boot button was held for 2 seconds, clear all stored MAC addresses
+  if (bootButtonHeldFor2s) {
+    // Clear all stored transmitter MAC addresses (but preserve debug monitor pairing)
+    persistence_clear();
+    transmitterManager.count = 0;
+    transmitterManager.slotsUsed = 0;
+    
+    // Note: We preserve debug monitor pairing so debug messages continue to work
+    // If you want to clear debug monitor too, uncomment the lines below:
+    
+    // Reset grace period state to re-enter grace period
+    pairingService.gracePeriodCheckDone = false;
+    pairingService.gracePeriodSkipped = false;
+    pairingService.initialPingSent = false;
+    pairingService.initialPingTime = 0;
+    pairingService.slotReassignmentDone = false;
+    pairingService.bootTime = millis();  // Reset boot time so grace period starts fresh
+    
+    // Reset LED service boot time to match
+    ledService.bootTime = pairingService.bootTime;
+    
+          DebugService::print( "Boot button held for 2s - cleared all stored MAC addresses");
+          DebugService::print( "Receiver will start fresh with no known transmitters");
+          DebugService::print( "Grace period restarted - actively seeking new transmitters");
+    
+    // Blink LED 5 times to indicate clear operation completed
+    #ifdef LED_PIN
+    if (LED_PIN != 255) {
+      for (int i = 0; i < 5; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(200);
+        digitalWrite(LED_PIN, LOW);
+        delay(200);
+      }
+    }
+    #endif
+    
+    delay(500);  // Give time to see the message
+  } else {
+    // Load persisted state only if boot button was NOT held for 2 seconds
+    persistence_load(&transmitterManager);
+  }
   
   ledService_init(&ledService, bootTime);
   
@@ -276,29 +407,123 @@ void setup() {
     receiverEspNowTransport_addPeer(&transport, transmitterManager.transmitters[i].mac, 0);
   }
   
-  // Add saved debug monitor as peer (if it was saved)
-  if (debugMonitor.paired) {
-    receiverEspNowTransport_addPeer(&transport, debugMonitor.mac, 0);
-    // Small delay to ensure peer is ready before sending messages
-    delay(50);
-    
-    // Send debug messages now that ESP-NOW is fully initialized
-    debugMonitor_print(&debugMonitor, "ESP-NOW initialized");
-    debugMonitor_print(&debugMonitor, "Loaded %d transmitter(s) from EEPROM", transmitterManager.count);
-    // Show slots used based on responsive transmitters only (not stored slotsUsed)
-    int responsiveSlots = transmitterManager_calculateSlotsUsed(&transmitterManager);
-    debugMonitor_print(&debugMonitor, "Pedal slots used: %d/%d (responsive transmitters only)", responsiveSlots, MAX_PEDAL_SLOTS);
-  }
+  // DebugService will automatically send buffered messages when debug monitor is discovered
+  // Send debug messages now that ESP-NOW is fully initialized
+  DebugService::print("ESP-NOW initialized");
+  DebugService::print("Loaded %d transmitter(s) from EEPROM", transmitterManager.count);
+  // Show slots used based on responsive transmitters only (not stored slotsUsed)
+  int responsiveSlots = transmitterManager_calculateSlotsUsed(&transmitterManager);
+  DebugService::print("Pedal slots used: %d/%d (responsive transmitters only)", responsiveSlots, MAX_PEDAL_SLOTS);
+  
+  // Broadcast MSG_ONLINE to announce receiver is online (debug monitor will respond)
+  online_message onlineMsg;
+  onlineMsg.deviceType = DEVICE_TYPE_RECEIVER;
+  onlineMsg.msgType = MSG_ONLINE;
+  WiFi.macAddress(onlineMsg.deviceMAC);
+  receiverEspNowTransport_broadcast(&transport, (uint8_t*)&onlineMsg, sizeof(onlineMsg));
   
   // Ping known transmitters immediately on boot (before pairing/grace period)
   // This restores previous pairings if transmitters are still online
   receiverPairingService_pingKnownTransmittersOnBoot(&pairingService);
   
-  debugMonitor_print(&debugMonitor, "=== Receiver Ready ===");
+          DebugService::print( "=== Receiver Ready ===");
 }
 
 void loop() {
   unsigned long currentTime = millis();
+  
+  // Check for runtime boot button press (hold for 2 seconds to clear)
+  static unsigned long buttonPressStart = 0;
+  static bool buttonWasPressed = false;
+  static bool clearingInProgress = false;
+  
+  bool buttonCurrentlyPressed = (digitalRead(0) == LOW);
+  
+  if (buttonCurrentlyPressed && !buttonWasPressed) {
+    // Button just pressed - start timer
+    buttonPressStart = currentTime;
+    buttonWasPressed = true;
+    clearingInProgress = false;
+  } else if (buttonCurrentlyPressed && buttonWasPressed && !clearingInProgress) {
+    // Button still held - check if held for 2 seconds
+    if (currentTime - buttonPressStart >= 2000) {
+      // Button held for 2 seconds - clear all stored MAC addresses
+      clearingInProgress = true;
+      
+      // Clear all stored transmitter MAC addresses (but preserve debug monitor pairing)
+      persistence_clear();
+      transmitterManager.count = 0;
+      transmitterManager.slotsUsed = 0;
+      
+      // Clear all transmitter slots
+      for (int i = 0; i < MAX_PEDAL_SLOTS; i++) {
+        memset(transmitterManager.transmitters[i].mac, 0, 6);
+        transmitterManager.transmitters[i].pedalMode = 0;
+        transmitterManager.transmitters[i].seenOnBoot = false;
+        transmitterManager.transmitters[i].lastSeen = 0;
+      }
+      
+      invalidateSlotCache();
+      
+      // Reset grace period state to re-enter grace period
+      // CRITICAL: Capture millis() once and use it for all timing resets
+      // Use currentTime from the loop() function to ensure consistency
+      unsigned long clearTime = currentTime;
+      
+      pairingService.gracePeriodCheckDone = false;
+      pairingService.gracePeriodSkipped = false;
+      pairingService.initialPingSent = false;
+      pairingService.initialPingTime = 0;
+      pairingService.slotReassignmentDone = false;
+      pairingService.bootTime = clearTime;  // Reset boot time so grace period starts fresh
+      
+      // Reset LED service boot time to match
+      ledService.bootTime = clearTime;
+      
+      // Ping known transmitters again (will be empty now, but resets state)
+      // This will set initialPingSent=true and initialPingTime=millis()
+      receiverPairingService_pingKnownTransmittersOnBoot(&pairingService);
+      
+      // CRITICAL FIX: Ensure initialPingTime is set relative to the new bootTime
+      // The ping function sets initialPingTime = millis(), but we need it relative to bootTime
+      // Since we just reset bootTime to clearTime, set initialPingTime to be close to bootTime
+      if (pairingService.initialPingSent) {
+        // Use the same clearTime (or very close) for initialPingTime
+        // This ensures timeSinceBoot and timeSincePing are calculated correctly
+        pairingService.initialPingTime = clearTime + 10;  // 10ms offset for ping send time
+      }
+      
+      // Broadcast MSG_ONLINE to announce receiver is ready for pairing (debug monitor will respond)
+      online_message onlineMsg;
+      onlineMsg.deviceType = DEVICE_TYPE_RECEIVER;
+      onlineMsg.msgType = MSG_ONLINE;
+      WiFi.macAddress(onlineMsg.deviceMAC);
+      receiverEspNowTransport_broadcast(&transport, (uint8_t*)&onlineMsg, sizeof(onlineMsg));
+      
+      DebugService::print( "Boot button held for 2s - cleared all stored MAC addresses");
+      DebugService::print( "Receiver will start fresh with no known transmitters");
+      DebugService::print( "Grace period restarted - actively seeking new transmitters");
+      DebugService::print( "DEBUG: bootTime reset to %lu, initialPingTime=%lu", 
+                         pairingService.bootTime, pairingService.initialPingTime);
+      
+      // Blink LED 5 times to indicate clear operation completed
+      #ifdef LED_PIN
+      if (LED_PIN != 255) {
+        for (int i = 0; i < 5; i++) {
+          digitalWrite(LED_PIN, HIGH);
+          delay(200);
+          digitalWrite(LED_PIN, LOW);
+          delay(200);
+        }
+      }
+      #endif
+    }
+  } else if (!buttonCurrentlyPressed && buttonWasPressed) {
+    // Button released - reset state
+    buttonWasPressed = false;
+    buttonPressStart = 0;
+    clearingInProgress = false;
+  }
   
   // Update pairing service (handles beacons, pings, replacement logic)
   receiverPairingService_update(&pairingService, currentTime);
@@ -339,7 +564,7 @@ void loop() {
       }
     }
     
-    debugMonitor_print(&debugMonitor, "Heartbeat: %d pedal(s) paired (%d/%d slots used)", 
+          DebugService::print( "Heartbeat: %d pedal(s) paired (%d/%d slots used)", 
                       pairedCount, cachedSlotsUsed, MAX_PEDAL_SLOTS);
   }
   
@@ -359,6 +584,5 @@ void loop() {
 #include "infrastructure/Persistence.cpp"
 #include "infrastructure/LEDService.cpp"
 #include "shared/debug_format.cpp"
-#include "infrastructure/DebugMonitor.cpp"
 #include "application/PairingService.cpp"
 #include "application/KeyboardService.cpp"

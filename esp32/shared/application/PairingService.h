@@ -17,7 +17,7 @@ typedef struct {
   uint8_t pendingDiscoveryMAC[6];
   uint8_t pendingDiscoveryChannel;
   bool hasPendingDiscovery;
-  // Track MSG_PAIRING_CONFIRMED timeout (send MSG_TRANSMITTER_ONLINE if no response)
+  // Track MSG_PAIRING_CONFIRMED timeout (send MSG_ONLINE if no response)
   unsigned long pairingConfirmedSentTime;
   bool waitingForPairingConfirmedAck;
 } PairingService;

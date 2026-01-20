@@ -81,3 +81,38 @@ void persistence_loadDebugMonitor(uint8_t* mac, bool* isPaired) {
   preferences.end();
 }
 
+void persistence_clear() {
+  preferences.begin("pedal", false);
+  
+  // Get the count first to know how many entries to clear
+  int count = preferences.getInt("pairedCount", 0);
+  
+  // Clear all transmitter MAC addresses and modes
+  for (int i = 0; i < count && i < MAX_PEDAL_SLOTS; i++) {
+    char macKey[12];
+    char modeKey[12];
+    snprintf(macKey, sizeof(macKey), "mac%d", i);
+    snprintf(modeKey, sizeof(modeKey), "mode%d", i);
+    
+    for (int j = 0; j < 6; j++) {
+      char key[15];
+      snprintf(key, sizeof(key), "%s_%d", macKey, j);
+      preferences.remove(key);
+    }
+    preferences.remove(modeKey);
+  }
+  
+  // Clear count and slots used
+  preferences.remove("pairedCount");
+  preferences.remove("pedalSlotsUsed");
+  
+  // Clear debug monitor pairing (optional - comment out if you want to keep debug monitor pairing)
+  preferences.remove("dbgmon_paired");
+  for (int j = 0; j < 6; j++) {
+    char key[15];
+    snprintf(key, sizeof(key), "dbgmon_%d", j);
+    preferences.remove(key);
+  }
+  
+  preferences.end();
+}

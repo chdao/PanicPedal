@@ -14,6 +14,9 @@ void debugMonitor_init(DebugMonitor* monitor, ReceiverEspNowTransport* transport
   monitor->paired = false;
   monitor->espNowInitialized = false;
   memset(monitor->mac, 0, 6);
+  monitor->bufferCount = 0;
+  monitor->bufferIndex = 0;
+  memset(monitor->messageBuffer, 0, sizeof(monitor->messageBuffer));
 }
 
 void debugMonitor_load(DebugMonitor* monitor) {
@@ -32,8 +35,74 @@ void debugMonitor_save(DebugMonitor* monitor) {
   }
 }
 
+static void debugMonitor_bufferMessage(DebugMonitor* monitor, const char* message) {
+  if (!monitor || !message || strlen(message) == 0) return;
+  
+  // Use circular buffer - overwrite oldest messages if buffer is full
+  int index = monitor->bufferIndex % MAX_BUFFERED_MESSAGES;
+  size_t msgLen = strlen(message);
+  size_t maxLen = sizeof(monitor->messageBuffer[0]) - 1;
+  
+  if (msgLen > maxLen) {
+    msgLen = maxLen;
+  }
+  
+  memcpy(monitor->messageBuffer[index], message, msgLen);
+  monitor->messageBuffer[index][msgLen] = '\0';
+  
+  monitor->bufferIndex++;
+  if (monitor->bufferCount < MAX_BUFFERED_MESSAGES) {
+    monitor->bufferCount++;
+  }
+}
+
+void debugMonitor_sendBufferedMessages(DebugMonitor* monitor) {
+  if (!monitor || !monitor->paired || !monitor->espNowInitialized) {
+    return;
+  }
+  
+  if (monitor->bufferCount == 0) {
+    return;  // No buffered messages
+  }
+  
+  // Add peer once
+  receiverEspNowTransport_addPeer(monitor->transport, monitor->mac, 0);
+  delay(10);
+  
+  // Send all buffered messages
+  int messagesToSend = monitor->bufferCount;
+  int startIndex = (monitor->bufferIndex - monitor->bufferCount) % MAX_BUFFERED_MESSAGES;
+  if (startIndex < 0) startIndex += MAX_BUFFERED_MESSAGES;
+  
+  for (int i = 0; i < messagesToSend; i++) {
+    int index = (startIndex + i) % MAX_BUFFERED_MESSAGES;
+    
+    debug_message debugMsg;
+    debugMsg.deviceType = DEVICE_TYPE_RECEIVER;
+    debugMsg.msgType = MSG_DEBUG;
+    
+    size_t msgLen = strlen(monitor->messageBuffer[index]);
+    if (msgLen > sizeof(debugMsg.message) - 1) {
+      msgLen = sizeof(debugMsg.message) - 1;
+    }
+    
+    memcpy(debugMsg.message, monitor->messageBuffer[index], msgLen);
+    debugMsg.message[msgLen] = '\0';
+    
+    receiverEspNowTransport_send(monitor->transport, monitor->mac, (uint8_t*)&debugMsg, sizeof(debugMsg));
+    
+    // Small delay between messages to avoid overwhelming ESP-NOW stack
+    delay(20);
+  }
+  
+  // Clear buffer after sending
+  monitor->bufferCount = 0;
+  monitor->bufferIndex = 0;
+  memset(monitor->messageBuffer, 0, sizeof(monitor->messageBuffer));
+}
+
 void debugMonitor_print(DebugMonitor* monitor, const char* format, ...) {
-  if (!monitor || !monitor->paired || !monitor->espNowInitialized) return;
+  if (!monitor) return;
   
   // Get receiver MAC address
   uint8_t receiverMAC[6];
@@ -46,19 +115,27 @@ void debugMonitor_print(DebugMonitor* monitor, const char* format, ...) {
   debugFormat_message_va(buffer, sizeof(buffer), receiverMAC, true, monitor->bootTime, format, args);
   va_end(args);
   
-  // Send to debug monitor via ESP-NOW
-  debug_message debugMsg;
-  debugMsg.msgType = MSG_DEBUG;
-  // Remove trailing newline if present
-  int len = strlen(buffer);
-  if (len > 0 && buffer[len-1] == '\n') {
-    buffer[len-1] = '\0';
-    len--;
+  // If debug monitor is paired and ESP-NOW is initialized, send directly
+  if (monitor->paired && monitor->espNowInitialized) {
+    // Send to debug monitor via ESP-NOW
+    debug_message debugMsg;
+    debugMsg.deviceType = DEVICE_TYPE_RECEIVER;
+    debugMsg.msgType = MSG_DEBUG;
+    // Remove trailing newline if present
+    int len = strlen(buffer);
+    if (len > 0 && buffer[len-1] == '\n') {
+      buffer[len-1] = '\0';
+      len--;
+    }
+    strncpy(debugMsg.message, buffer, sizeof(debugMsg.message) - 1);
+    debugMsg.message[sizeof(debugMsg.message) - 1] = '\0';
+    
+    receiverEspNowTransport_send(monitor->transport, monitor->mac, (uint8_t*)&debugMsg, sizeof(debugMsg));
+  } else {
+    // If debug monitor is not paired yet, buffer the message for later
+    // This allows debug monitor to receive messages from boot when it connects
+    debugMonitor_bufferMessage(monitor, buffer);
   }
-  strncpy(debugMsg.message, buffer, sizeof(debugMsg.message) - 1);
-  debugMsg.message[sizeof(debugMsg.message) - 1] = '\0';
-  
-  receiverEspNowTransport_send(monitor->transport, monitor->mac, (uint8_t*)&debugMsg, sizeof(debugMsg));
 }
 
 void debugMonitor_handleDiscoveryRequest(DebugMonitor* monitor, const uint8_t* senderMAC, uint8_t channel) {
@@ -73,4 +150,7 @@ void debugMonitor_handleDiscoveryRequest(DebugMonitor* monitor, const uint8_t* s
   
   // Save pairing state
   debugMonitor_save(monitor);
+  
+  // Send all buffered messages from boot
+  debugMonitor_sendBufferedMessages(monitor);
 }

@@ -46,11 +46,13 @@ SlotAvailabilityResult slotManager_checkReconnection(const TransmitterManager* m
   result.currentSlotsUsed = transmitterManager_calculateSlotsUsed(manager);
   
   if (wasAlreadyResponsive) {
-    // Already responsive - no change in slot usage
-    result.canFit = true;
+    // Already responsive - verify slots are still available
+    // Calculate what slots would be used if we accept this reconnection
+    // (should be the same as current, but verify to prevent over-allocation)
     result.slotsAfterChange = result.currentSlotsUsed;
+    result.canFit = (result.slotsAfterChange <= MAX_PEDAL_SLOTS);
   } else {
-    // Becoming responsive - add its slots
+    // Becoming responsive - add its slots and verify they fit
     result.slotsAfterChange = result.currentSlotsUsed + slotsNeeded;
     result.canFit = (result.slotsAfterChange <= MAX_PEDAL_SLOTS);
   }

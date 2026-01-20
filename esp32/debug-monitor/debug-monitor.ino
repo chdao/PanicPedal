@@ -8,11 +8,13 @@
  */
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <string.h>
 
 // Reuse shared message definitions + ESP-NOW transport abstraction.
 // This keeps message types/structs consistent across receiver/transmitters/debug monitor.
 #include "../shared/messages.h"
+#include "../shared/config.h"
 #include "../shared/infrastructure/EspNowTransport.h"
 
 static EspNowTransport g_transport;
@@ -22,7 +24,8 @@ static unsigned long lastDiscoverySend = 0;
 
 static bool gotAnyDebugMessage = false;
 
-#define DISCOVERY_SEND_INTERVAL 3000     // Send discovery every 3 seconds
+// Use shared discovery interval constant
+#define DISCOVERY_SEND_INTERVAL DISCOVERY_SEND_INTERVAL_MS
 
 // Message queue to avoid printing from interrupt context (ESP-NOW callback)
 // Copy formatted lines to queue, print from main loop to prevent truncation/interleaving
@@ -38,11 +41,7 @@ static volatile int g_queueWriteIndex = 0;
 static volatile int g_queueReadIndex = 0;
 static volatile int g_queueCount = 0;
 
-// Debug monitor discovery request (receiver only checks msgType).
-typedef struct __attribute__((packed)) debug_monitor_req_message {
-  uint8_t msgType;        // MSG_DEBUG_MONITOR_REQ
-  uint8_t reserved[3];
-} debug_monitor_req_message;
+// debug_monitor_req_message is defined in shared/messages.h - use that one (includes deviceType)
 
 // Queue a formatted message line (called from ESP-NOW callback - must be fast/non-blocking)
 static bool queueMessage(const char* formattedLine) {
@@ -96,10 +95,85 @@ static void processMessageQueue() {
   }
 }
 
-static void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t /*channel*/) {
-  if (!senderMAC || !data || len < 1) return;
+static void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, uint8_t channel) {
+  if (!senderMAC || !data || len < 2) return;  // Need at least deviceType + msgType
 
-  uint8_t msgType = data[0];
+  uint8_t deviceType = data[0];  // First byte is deviceType
+  uint8_t msgType = data[1];     // Second byte is msgType
+  
+  // Respond to MSG_ONLINE with our MAC address to let devices know we're available
+  if (msgType == MSG_ONLINE && len >= sizeof(online_message)) {
+    online_message* onlineMsg = (online_message*)data;
+    // Respond to both transmitters and receivers
+    if (onlineMsg->deviceType == DEVICE_TYPE_TRANSMITTER || onlineMsg->deviceType == DEVICE_TYPE_RECEIVER) {
+      // Respond with our MAC address
+      debug_monitor_req_message resp;
+      resp.deviceType = DEVICE_TYPE_DEBUG_MONITOR;
+      resp.msgType = MSG_DEBUG_MONITOR_REQ;
+      
+      // Get this device's MAC address
+      uint8_t mac[6];
+      WiFi.macAddress(mac);
+      memcpy(resp.monitorMAC, mac, 6);
+    
+      // Send response directly to the device that came online
+      espNowTransport_addPeer(&g_transport, senderMAC, channel);
+      delay(5);
+      espNowTransport_send(&g_transport, senderMAC, (uint8_t*)&resp, sizeof(resp));
+      
+      // Exit discovery mode if it's from a receiver (we found the receiver)
+      if (onlineMsg->deviceType == DEVICE_TYPE_RECEIVER) {
+        discoveryMode = false;
+      }
+    }
+    return;
+  }
+  
+  // Respond to MSG_BEACON from receiver with our MAC address (fallback/legacy)
+  if (deviceType == DEVICE_TYPE_RECEIVER && msgType == MSG_BEACON && len >= sizeof(beacon_message)) {
+    // Respond with our MAC address
+    debug_monitor_req_message resp;
+    resp.deviceType = DEVICE_TYPE_DEBUG_MONITOR;
+    resp.msgType = MSG_DEBUG_MONITOR_REQ;
+    
+    // Get this device's MAC address
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    memcpy(resp.monitorMAC, mac, 6);
+  
+    // Send response directly to the receiver
+    espNowTransport_addPeer(&g_transport, senderMAC, channel);
+    delay(5);
+    espNowTransport_send(&g_transport, senderMAC, (uint8_t*)&resp, sizeof(resp));
+    
+    // Exit discovery mode since we found the receiver
+    discoveryMode = false;
+    return;
+  }
+  
+  // Handle debug monitor discovery request from transmitters/receivers (legacy/fallback)
+  if (msgType == MSG_DEBUG_MONITOR_REQ && len >= sizeof(debug_monitor_req_message)) {
+    debug_monitor_req_message* req = (debug_monitor_req_message*)data;
+    // Only respond if it's from a transmitter or receiver (not another debug monitor)
+    if (req->deviceType == DEVICE_TYPE_TRANSMITTER || req->deviceType == DEVICE_TYPE_RECEIVER) {
+      // Respond with our MAC address
+      debug_monitor_req_message resp;
+      resp.deviceType = DEVICE_TYPE_DEBUG_MONITOR;
+      resp.msgType = MSG_DEBUG_MONITOR_REQ;
+      
+      // Get this device's MAC address
+      uint8_t mac[6];
+      WiFi.macAddress(mac);
+      memcpy(resp.monitorMAC, mac, 6);
+      
+      // Send response directly to requester
+      espNowTransport_addPeer(&g_transport, senderMAC, channel);
+      delay(5);
+      espNowTransport_send(&g_transport, senderMAC, (uint8_t*)&resp, sizeof(resp));
+    }
+    return;
+  }
+  
   if (msgType != MSG_DEBUG) return;
 
   // Copy message data immediately (ESP-NOW buffer may be reused)
@@ -131,7 +205,15 @@ static void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int
 }
 
 static void sendDiscoveryRequest() {
-  debug_monitor_req_message req = {MSG_DEBUG_MONITOR_REQ, {0, 0, 0}};
+  debug_monitor_req_message req;
+  req.deviceType = DEVICE_TYPE_DEBUG_MONITOR;
+  req.msgType = MSG_DEBUG_MONITOR_REQ;
+  
+  // Get this device's MAC address
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  memcpy(req.monitorMAC, mac, 6);
+  
   espNowTransport_broadcast(&g_transport, (uint8_t*)&req, sizeof(req));
 }
 

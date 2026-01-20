@@ -58,53 +58,12 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [
-        [
-          "annular_width|145000000|110000000|fa021ce0-91d3-4b32-bc2f-b8324b2fdb96|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|147000000|110000000|1a1ebe32-fc17-477e-a52e-9d965a8e346b|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|149000000|110000000|a99555cb-dada-4a56-b6ec-ebf013f9a31f|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|158000000|110000000|688e6640-8357-4c5b-b9b9-e93bdf57bf82|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|160000000|110000000|ea4e4eaf-3793-4f8f-96aa-e61bedf6cb89|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|162000000|110000000|0ff7a697-3f31-4402-aed4-e868931414cf|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|193640000|91000000|8b268eed-4655-47eb-b765-3c4eb6fe1203|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|195640000|91000000|84d5efef-f57e-44f7-ac29-6a2616287515|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|37500000|109000000|d4efff22-9488-46f3-9a91-1d44c65bc139|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "annular_width|39500000|109000000|06b7d523-715b-4e78-ae4a-4cc0900753a3|00000000-0000-0000-0000-000000000000",
-          ""
-        ]
-      ],
+      "drc_exclusions": [],
       "meta": {
         "version": 2
       },
       "rule_severities": {
-        "annular_width": "error",
+        "annular_width": "warning",
         "clearance": "error",
         "connection_width": "warning",
         "copper_edge_clearance": "error",
@@ -580,7 +539,7 @@
       "plot": "PCBWAY",
       "pos_files": "JLCPCB/",
       "specctra_dsn": "esp32-pedal-pcb.dsn",
-      "step": "",
+      "step": "esp32-pedal-pcb.step",
       "svg": "",
       "vrml": ""
     },

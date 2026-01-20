@@ -115,7 +115,7 @@ void receiverPairingService_handleDiscoveryRequest(ReceiverPairingService* servi
   // Add as peer and send response
   receiverEspNowTransport_addPeer(service->transport, txMAC, channel);
   
-  struct_message response = {MSG_DISCOVERY_RESP, 0, false, 0};
+  struct_message response = {DEVICE_TYPE_RECEIVER, MSG_DISCOVERY_RESP, 0, false, 0};
   bool sent = receiverEspNowTransport_send(service->transport, txMAC, (uint8_t*)&response, sizeof(response));
   if (service->debugCallback) {
     if (sent) {
@@ -214,41 +214,34 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
                              macStr, isCurrentlyPaired ? "yes" : "no", currentSlots, MAX_PEDAL_SLOTS, slotsNeeded);
     }
     
-    // Send MSG_PAIRING_CONFIRMED to known transmitters when they send MSG_TRANSMITTER_ONLINE:
-    // - If currently paired: Always send (reconfirm pairing, transmitter will respond with MSG_PAIRING_CONFIRMED_ACK)
-    // - If not currently paired: Send only if slots are available (they're coming back online)
-    bool shouldRespond = false;
-    if (isCurrentlyPaired) {
-      // Currently paired transmitter - always send MSG_PAIRING_CONFIRMED to reconfirm pairing
-      // Transmitter will respond with MSG_PAIRING_CONFIRMED_ACK (no loop since it's a different message type)
-      shouldRespond = true;
+    // Send MSG_PAIRING_CONFIRMED to known transmitters when they send MSG_ONLINE:
+    // Always check slot availability, even for already-paired transmitters
+    // This prevents over-allocation if slots have been reassigned
+    SlotAvailabilityResult result = slotManager_checkReconnection(service->manager, transmitterIndex, slotsNeeded);
+    
+    if (!result.canFit) {
+      // Not enough slots available - refuse pairing
       if (service->debugCallback) {
         char macStr[18];
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
-        service->debugCallback("Transmitter %s is already paired - sending MSG_PAIRING_CONFIRMED to reconfirm", macStr);
+        service->debugCallback("Transmitter %s requesting pairing but slots full (%d + %d > %d) - refusing", 
+                               macStr, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
       }
-    } else {
-      // NOT currently paired - check if slots available using SlotManager
-      SlotAvailabilityResult result = slotManager_checkReconnection(service->manager, transmitterIndex, slotsNeeded);
-      if (result.canFit) {
-        shouldRespond = true;
-        if (service->debugCallback) {
-          char macStr[18];
-          snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-                   txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
-          service->debugCallback("Transmitter %s not currently paired but slots available - sending MSG_PAIRING_CONFIRMED", macStr);
-        }
+      service->manager->transmitters[transmitterIndex].lastSeen = millis();
+      return;
+    }
+    
+    // Slots available - send pairing confirmation
+    bool shouldRespond = true;
+    if (service->debugCallback) {
+      char macStr[18];
+      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
+      if (isCurrentlyPaired) {
+        service->debugCallback("Transmitter %s is already paired - sending MSG_PAIRING_CONFIRMED to reconfirm", macStr);
       } else {
-        if (service->debugCallback) {
-          char macStr[18];
-          snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-                   txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
-          service->debugCallback("Transmitter %s not currently paired and slots full (%d + %d > %d) - not responding", 
-                                 macStr, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
-        }
-        service->manager->transmitters[transmitterIndex].lastSeen = millis();
-        return;
+        service->debugCallback("Transmitter %s not currently paired but slots available - sending MSG_PAIRING_CONFIRMED", macStr);
       }
     }
     
@@ -263,6 +256,7 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
     
     // Send pairing confirmation message ("You're paired with me")
     pairing_confirmed_message confirm;
+    confirm.deviceType = DEVICE_TYPE_RECEIVER;
     confirm.msgType = MSG_PAIRING_CONFIRMED;
     WiFi.macAddress(confirm.receiverMAC);
     
@@ -296,7 +290,7 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
       memcpy(service->pendingNewTransmitterMAC, txMAC, 6);
       
       // Ping all paired transmitters
-      struct_message ping = {MSG_ALIVE, 0, false, 0};
+      struct_message ping = {DEVICE_TYPE_RECEIVER, MSG_ALIVE, 0, false, 0};
       for (int i = 0; i < service->manager->count; i++) {
         service->transmitterResponded[i] = false;
         receiverEspNowTransport_send(service->transport, service->manager->transmitters[i].mac, 
@@ -310,7 +304,7 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
       // This allows previously paired transmitters (that were removed) to reconnect
       receiverEspNowTransport_addPeer(service->transport, txMAC, channel);
       
-      struct_message alive = {MSG_ALIVE, 0, false, 0};
+      struct_message alive = {DEVICE_TYPE_RECEIVER, MSG_ALIVE, 0, false, 0};
       receiverEspNowTransport_send(service->transport, txMAC, (uint8_t*)&alive, sizeof(alive));
       
       if (service->debugCallback) {
@@ -378,6 +372,7 @@ void receiverPairingService_sendBeacon(ReceiverPairingService* service) {
   }
   
   beacon_message beacon;
+  beacon.deviceType = DEVICE_TYPE_RECEIVER;
   beacon.msgType = MSG_BEACON;
   WiFi.macAddress(beacon.receiverMAC);
   beacon.availableSlots = transmitterManager_getAvailableSlots(service->manager);
@@ -399,6 +394,7 @@ void receiverPairingService_pingKnownTransmittersOnBoot(ReceiverPairingService* 
   // On boot, all transmitters loaded from EEPROM start with seenOnBoot = false
   // This gives them priority over new transmitters during grace period
   pairing_confirmed_message confirm;
+  confirm.deviceType = DEVICE_TYPE_RECEIVER;
   confirm.msgType = MSG_PAIRING_CONFIRMED;
   WiFi.macAddress(confirm.receiverMAC);
   int pingCount = 0;
@@ -435,8 +431,8 @@ void receiverPairingService_pingKnownTransmittersOnBoot(ReceiverPairingService* 
         }
       }
       
-      // Don't mark as seen yet - wait for MSG_TRANSMITTER_ONLINE response
-      // The transmitter will send MSG_TRANSMITTER_ONLINE to acknowledge it received MSG_PAIRING_CONFIRMED
+      // Don't mark as seen yet - wait for MSG_ONLINE response
+      // The transmitter will send MSG_ONLINE to acknowledge it received MSG_PAIRING_CONFIRMED
     }
   }
   
@@ -463,12 +459,12 @@ void receiverPairingService_pingKnownTransmitters(ReceiverPairingService* servic
   }
   
   // During grace period, send MSG_PAIRING_CONFIRMED to unresponsive known transmitters periodically
-  // But only send once per transmitter (don't spam) - wait for them to respond with pedal events or MSG_TRANSMITTER_ONLINE
+  // But only send once per transmitter (don't spam) - wait for them to respond with pedal events or MSG_ONLINE
   // We already sent MSG_PAIRING_CONFIRMED on boot, so we don't need to keep sending it repeatedly
-  // The transmitter will send a pedal event or MSG_TRANSMITTER_ONLINE when it comes online, which will mark it as seen
+  // The transmitter will send a pedal event or MSG_ONLINE when it comes online, which will mark it as seen
   
   // Actually, we don't need to send MSG_PAIRING_CONFIRMED repeatedly - we already sent it on boot
-  // If the transmitter is online, it will send pedal events or MSG_TRANSMITTER_ONLINE
+  // If the transmitter is online, it will send pedal events or MSG_ONLINE
   // If it's offline, sending repeatedly won't help
   // So we can remove this periodic ping entirely, or just skip it
   // The initial ping on boot is sufficient
@@ -532,10 +528,15 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
       }
     } else if (responsiveCount == 0) {
       // No known transmitters responded after initial wait - they might come online later during grace period
+      int reservedSlots = transmitterManager_calculateReservedSlots(service->manager);
       if (service->debugCallback) {
-        service->debugCallback("No known pedals replied to initial ping - preserving loaded transmitters");
+        if (reservedSlots > 0) {
+          service->debugCallback("No known pedals replied to initial ping - preserving loaded transmitters");
+        } else {
+          service->debugCallback("No known pedals loaded - ready for new pairings");
+        }
       }
-      // Don't modify anything - transmitters remain loaded from EEPROM
+      // Don't modify anything - transmitters remain loaded from EEPROM (if any)
     }
     }
   }
@@ -593,7 +594,11 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
     // Slots are available - continue grace period normally
     // Grace period will continue until timeout or slots fill up (checked continuously above)
     if (timeSinceBoot >= TRANSMITTER_TIMEOUT) {
-      // Grace period timeout reached
+      // Grace period timeout reached (30 seconds from bootTime reset)
+      if (service->debugCallback) {
+        service->debugCallback("DEBUG: Grace period timeout - timeSinceBoot=%lu, bootTime=%lu, currentTime=%lu", 
+                               timeSinceBoot, service->bootTime, currentTime);
+      }
       service->gracePeriodCheckDone = true;
       
       // After grace period timeout, update slotsUsed to match only responsive transmitters
@@ -624,9 +629,12 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
             // All slots reserved by known transmitters, but none responded
             service->debugCallback("Grace period ended: All slots reserved by known transmitters (%d/%d), but none replied - preserving loaded transmitters", 
                                   reservedSlots, MAX_PEDAL_SLOTS);
-          } else {
-            // No slots reserved, no pedals paired
+          } else if (reservedSlots > 0) {
+            // Some slots reserved but no pedals paired
             service->debugCallback("Grace period ended: No pedals paired - preserving loaded transmitters");
+          } else {
+            // No slots reserved, no pedals paired - fresh start
+            service->debugCallback("Grace period ended: No pedals paired - ready for new pairings");
           }
         } else {
           service->debugCallback("Grace period ended: %d pedal(s) paired (%d/%d slots used)", 
@@ -642,7 +650,7 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
   // Send beacons during grace period only (after initial wait)
   // Only send beacons if slots are still available (known transmitters haven't filled all slots)
   // Note: We don't ping known transmitters periodically - we already sent MSG_PAIRING_CONFIRMED on boot
-  // If they're online, they'll respond with pedal events or MSG_TRANSMITTER_ONLINE
+  // If they're online, they'll respond with pedal events or MSG_ONLINE
   // Only send beacons after initial ping was sent and 1 second has elapsed
   if (!service->gracePeriodCheckDone && service->initialPingSent && service->initialPingTime > 0) {
     unsigned long timeSincePing = currentTime - service->initialPingTime;
@@ -669,7 +677,7 @@ void receiverPairingService_update(ReceiverPairingService* service, unsigned lon
         memcmp(service->pendingNewTransmitterMAC, broadcastMAC, 6) != 0) {
       receiverEspNowTransport_addPeer(service->transport, service->pendingNewTransmitterMAC, 0);
       
-      struct_message alive = {MSG_ALIVE, 0, false, 0};
+      struct_message alive = {DEVICE_TYPE_RECEIVER, MSG_ALIVE, 0, false, 0};
       receiverEspNowTransport_send(service->transport, service->pendingNewTransmitterMAC, 
                                    (uint8_t*)&alive, sizeof(alive));
     }

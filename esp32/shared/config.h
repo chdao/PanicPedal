@@ -27,7 +27,7 @@
 // Discovery request interval (debug monitor)
 #define DISCOVERY_SEND_INTERVAL_MS 3000  // 3 seconds
 
-// Pairing confirmed timeout - if no ACK received within this time, send MSG_TRANSMITTER_ONLINE
+// Pairing confirmed timeout - if no ACK received within this time, send MSG_ONLINE
 #define PAIRING_CONFIRMED_TIMEOUT_MS 1000  // 1 second
 
 // ============================================================================

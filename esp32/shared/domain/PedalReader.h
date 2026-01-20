@@ -8,6 +8,7 @@ typedef struct {
   bool lastState;
   volatile bool interruptFlag;  // Set by ISR when interrupt occurs (GPIO read in main loop to avoid watchdog timeout)
   unsigned long lastDebounceTime;  // Timestamp of last processed interrupt (for debouncing)
+  unsigned long lastInterruptTime;  // Timestamp of last interrupt (for noise filtering)
 } PedalState;
 
 typedef struct {

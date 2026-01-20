@@ -12,7 +12,7 @@
 
 // Forward declaration for debug function (defined in transmitter.ino)
 extern void debugPrint(const char* format, ...);
-extern bool debugEnabled;  // Runtime debug flag (can be checked for conditional logic)
+#include "../infrastructure/DebugService.h"
 
 static inline const char* formatMAC(const uint8_t* mac) {
   // Only use for debug prints; uses a static buffer to keep call sites compact.
@@ -54,32 +54,38 @@ void pairingService_handleBeacon(PairingService* service, const uint8_t* senderM
     // If this is a previously paired receiver, automatically send discovery request
     // This handles both reconnection scenarios and cases where pairing was lost
     if (isPreviouslyPaired && !pairingState_isPaired(service->pairingState)) {
-      if (debugEnabled) {
-        debugPrint("Beacon from previously paired receiver: %s - sending discovery request", formatMAC(beacon->receiverMAC));
+      if (DebugService::isEnabled()) {
+        debugPrint("Beacon from previously paired receiver: %s (slots=%d/%d) - sending discovery request", 
+                   formatMAC(beacon->receiverMAC), beacon->availableSlots, beacon->totalSlots);
       }
       
       // Automatically initiate pairing with previously paired receiver
       pairingService_initiatePairing(service, beacon->receiverMAC, 0);
     }
   } else {
+    // Not enough slots available - clear discovered receiver state
+    if (DebugService::isEnabled()) {
+      debugPrint("Beacon from receiver %s has insufficient slots (%d/%d, need %d) - clearing discovery state", 
+                 formatMAC(beacon->receiverMAC), beacon->availableSlots, beacon->totalSlots, slotsNeeded);
+    }
     pairingState_clearDiscoveredReceiver(service->pairingState);
   }
 }
 
 void pairingService_handleDiscoveryResponse(PairingService* service, const uint8_t* senderMAC, uint8_t channel) {
-  if (debugEnabled) {
+  if (DebugService::isEnabled()) {
     debugPrint("Received MSG_DISCOVERY_RESP from receiver: %s (waiting=%s)", 
                formatMAC(senderMAC), service->pairingState->waitingForDiscoveryResponse ? "true" : "false");
   }
   
   if (!service->pairingState->waitingForDiscoveryResponse) {
-    if (debugEnabled) {
+    if (DebugService::isEnabled()) {
       debugPrint("Ignoring discovery response - not waiting for one");
     }
     return;  // Not waiting for response
   }
   
-  if (debugEnabled) {
+  if (DebugService::isEnabled()) {
     debugPrint("Processing discovery response - pairing with receiver");
   }
   
@@ -98,14 +104,14 @@ void pairingService_handleDiscoveryResponse(PairingService* service, const uint8
 }
 
 void pairingService_handleAlive(PairingService* service, const uint8_t* senderMAC, uint8_t channel) {
-  if (debugEnabled) {
+  if (DebugService::isEnabled()) {
     debugPrint("Handling MSG_ALIVE from receiver: %s (channel=%d)", formatMAC(senderMAC), channel);
   }
   
   // Check if we're currently paired
   bool isCurrentlyPaired = pairingState_isPaired(service->pairingState);
   
-  if (debugEnabled) {
+  if (DebugService::isEnabled()) {
     debugPrint("Currently paired: %s", isCurrentlyPaired ? "true" : "false");
   }
   
@@ -113,10 +119,10 @@ void pairingService_handleAlive(PairingService* service, const uint8_t* senderMA
     bool isPairedReceiver = macEqual(senderMAC, service->pairingState->pairedReceiverMAC);
     
     if (isPairedReceiver) {
-      // Paired receiver requesting discovery - send MSG_TRANSMITTER_ONLINE so receiver responds with MSG_PAIRING_CONFIRMED
+      // Paired receiver requesting discovery - send MSG_ONLINE so receiver responds with MSG_PAIRING_CONFIRMED
       // Defer to main loop (can't send from callback)
-      if (debugEnabled) {
-        debugPrint("MSG_ALIVE from paired receiver: %s - will send MSG_TRANSMITTER_ONLINE", formatMAC(senderMAC));
+      if (DebugService::isEnabled()) {
+        debugPrint("MSG_ALIVE from paired receiver: %s - will send MSG_ONLINE", formatMAC(senderMAC));
       }
       service->hasPendingDiscovery = true;
       macCopy(service->pendingDiscoveryMAC, senderMAC);
@@ -124,14 +130,14 @@ void pairingService_handleAlive(PairingService* service, const uint8_t* senderMA
       return;
     } else {
       // Different receiver - tell it to remove us from its list
-      if (debugEnabled) {
+      if (DebugService::isEnabled()) {
         debugPrint("MSG_ALIVE from different receiver (%s) - we're paired to %s - sending DELETE_RECORD", 
                    formatMAC(senderMAC), formatMAC(service->pairingState->pairedReceiverMAC));
       }
       espNowTransport_addPeer(service->transport, senderMAC, channel);
-      struct_message deleteMsg = {MSG_DELETE_RECORD, 0, false, 0};
+      struct_message deleteMsg = {DEVICE_TYPE_TRANSMITTER, MSG_DELETE_RECORD, 0, false, 0};
       bool sent = espNowTransport_send(service->transport, senderMAC, (uint8_t*)&deleteMsg, sizeof(deleteMsg));
-      if (debugEnabled) {
+      if (DebugService::isEnabled()) {
         debugPrint("DELETE_RECORD %s to different receiver", sent ? "sent successfully" : "send FAILED");
       }
       return;
@@ -139,7 +145,7 @@ void pairingService_handleAlive(PairingService* service, const uint8_t* senderMA
   }
   
   // Not paired - receiver is requesting discovery, defer to main loop
-  if (debugEnabled) {
+  if (DebugService::isEnabled()) {
     debugPrint("MSG_ALIVE from receiver (not paired): %s - deferring discovery request", formatMAC(senderMAC));
   }
   pairingState_setDiscoveredReceiver(service->pairingState, senderMAC, 2, channel);
@@ -153,25 +159,59 @@ void pairingService_handleAlive(PairingService* service, const uint8_t* senderMA
 void pairingService_initiatePairing(PairingService* service, const uint8_t* receiverMAC, uint8_t channel) {
   // Validate prerequisites
   if (!isValidMAC(receiverMAC)) {
+    if (DebugService::isEnabled()) {
+      DebugService::print("Cannot initiate pairing - invalid receiver MAC");
+    }
     return;
   }
   if (pairingState_isPaired(service->pairingState)) {
-    return;
-  }
-  if (!service->pairingState->receiverBeaconReceived) {
+    if (DebugService::isEnabled()) {
+      DebugService::print("Cannot initiate pairing - already paired");
+    }
     return;
   }
   
-  // Check if receiver has enough slots available
+  // Allow pairing initiation even without beacon if we have a previously paired receiver MAC
+  // This allows pedal press to trigger pairing with a previously known receiver
+  bool hasPreviouslyPairedReceiver = !macIsZero(service->pairingState->pairedReceiverMAC) &&
+                                      macEqual(receiverMAC, service->pairingState->pairedReceiverMAC);
+  
+  if (!service->pairingState->receiverBeaconReceived && !hasPreviouslyPairedReceiver) {
+    if (DebugService::isEnabled()) {
+      DebugService::print("Cannot initiate pairing - no receiver beacon received and not a previously paired receiver");
+    }
+    return;
+  }
+  
+  // Check if receiver has enough slots available (only if we received a beacon)
+  // If it's a previously paired receiver without beacon, assume slots are available and let receiver decide
   int slotsNeeded = getSlotsNeeded(service->pedalMode);
-  if (service->pairingState->discoveredAvailableSlots < slotsNeeded) {
+  if (service->pairingState->receiverBeaconReceived && 
+      service->pairingState->discoveredAvailableSlots < slotsNeeded) {
+    if (DebugService::isEnabled()) {
+      DebugService::print("Cannot initiate pairing - insufficient slots (available: %d, needed: %d)", 
+                         service->pairingState->discoveredAvailableSlots, slotsNeeded);
+    }
     return;
   }
   
   // Send discovery request
+  if (DebugService::isEnabled()) {
+    DebugService::print("Sending MSG_DISCOVERY_REQ to receiver %s (slots available: %d, needed: %d)", 
+                       formatMAC(receiverMAC), service->pairingState->discoveredAvailableSlots, slotsNeeded);
+  }
   espNowTransport_addPeer(service->transport, receiverMAC, channel);
-  struct_message discovery = {MSG_DISCOVERY_REQ, 0, false, service->pedalMode};
-  espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&discovery, sizeof(discovery));
+  delay(10);  // Small delay to ensure peer is ready
+  struct_message discovery = {DEVICE_TYPE_TRANSMITTER, MSG_DISCOVERY_REQ, 0, false, service->pedalMode};
+  bool sent = espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&discovery, sizeof(discovery));
+  
+  if (DebugService::isEnabled()) {
+    if (sent) {
+      DebugService::print("MSG_DISCOVERY_REQ sent successfully");
+    } else {
+      DebugService::print("MSG_DISCOVERY_REQ send FAILED");
+    }
+  }
   
   service->pairingState->waitingForDiscoveryResponse = true;
   service->pairingState->discoveryRequestTime = millis();
@@ -193,12 +233,13 @@ void pairingService_broadcastOnline(PairingService* service) {
   uint8_t transmitterMAC[6];
   getCachedTransmitterMAC(transmitterMAC);
   
-  transmitter_online_message onlineMsg;
-  onlineMsg.msgType = MSG_TRANSMITTER_ONLINE;
-  macCopy(onlineMsg.transmitterMAC, transmitterMAC);
+  online_message onlineMsg;
+  onlineMsg.deviceType = DEVICE_TYPE_TRANSMITTER;
+  onlineMsg.msgType = MSG_ONLINE;
+  macCopy(onlineMsg.deviceMAC, transmitterMAC);
   
-  if (debugEnabled) {
-    debugPrint("Broadcasting TRANSMITTER_ONLINE message");
+      if (DebugService::isEnabled()) {
+        debugPrint("Broadcasting MSG_ONLINE message");
   }
   
   espNowTransport_broadcast(service->transport, (uint8_t*)&onlineMsg, sizeof(onlineMsg));
@@ -209,6 +250,7 @@ void pairingService_broadcastPaired(PairingService* service, const uint8_t* rece
   getCachedTransmitterMAC(transmitterMAC);
   
   transmitter_paired_message pairedMsg;
+  pairedMsg.deviceType = DEVICE_TYPE_TRANSMITTER;
   pairedMsg.msgType = MSG_TRANSMITTER_PAIRED;
   macCopy(pairedMsg.transmitterMAC, transmitterMAC);
   macCopy(pairedMsg.receiverMAC, receiverMAC);
@@ -245,7 +287,7 @@ void pairingService_processPendingDiscovery(PairingService* service) {
   
   // Validate transport is ready
   if (!service->transport || !service->transport->initialized) {
-    if (debugEnabled) {
+    if (DebugService::isEnabled()) {
       debugPrint("ESP-NOW transport not initialized - cannot send message");
     }
     return;
@@ -256,9 +298,9 @@ void pairingService_processPendingDiscovery(PairingService* service) {
                   macEqual(receiverMAC, service->pairingState->pairedReceiverMAC);
   
   if (isPaired) {
-    // Already paired - send MSG_TRANSMITTER_ONLINE so receiver responds with MSG_PAIRING_CONFIRMED
-    if (debugEnabled) {
-      debugPrint("Sending MSG_TRANSMITTER_ONLINE to paired receiver: %s", formatMAC(receiverMAC));
+    // Already paired - send MSG_ONLINE so receiver responds with MSG_PAIRING_CONFIRMED
+    if (DebugService::isEnabled()) {
+      debugPrint("Sending MSG_ONLINE to paired receiver: %s", formatMAC(receiverMAC));
     }
     
     espNowTransport_addPeer(service->transport, receiverMAC, channel);
@@ -268,23 +310,24 @@ void pairingService_processPendingDiscovery(PairingService* service) {
     
     uint8_t transmitterMAC[6];
     getCachedTransmitterMAC(transmitterMAC);
-    transmitter_online_message onlineMsg;
-    onlineMsg.msgType = MSG_TRANSMITTER_ONLINE;
-    macCopy(onlineMsg.transmitterMAC, transmitterMAC);
+    online_message onlineMsg;
+    onlineMsg.deviceType = DEVICE_TYPE_TRANSMITTER;
+    onlineMsg.msgType = MSG_ONLINE;
+    macCopy(onlineMsg.deviceMAC, transmitterMAC);
     
     bool sent = espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&onlineMsg, sizeof(onlineMsg));
-    if (debugEnabled) {
-      debugPrint("MSG_TRANSMITTER_ONLINE %s to paired receiver", sent ? "sent successfully" : "send FAILED");
+    if (DebugService::isEnabled()) {
+      debugPrint("MSG_ONLINE %s to paired receiver", sent ? "sent successfully" : "send FAILED");
     }
   } else {
     // Not paired - send discovery request
-    if (debugEnabled) {
+    if (DebugService::isEnabled()) {
       debugPrint("Processing deferred discovery request to receiver: %s (channel=%d)", formatMAC(receiverMAC), channel);
     }
     
     // Add peer with the stored channel (from the original MSG_ALIVE message)
     if (!espNowTransport_addPeer(service->transport, receiverMAC, channel)) {
-      if (debugEnabled) {
+      if (DebugService::isEnabled()) {
         debugPrint("Failed to add peer for discovery request");
       }
       return;
@@ -298,17 +341,17 @@ void pairingService_processPendingDiscovery(PairingService* service) {
     // Verify peer was added successfully before attempting to send
     esp_now_peer_info_t peerInfo;
     if (esp_now_get_peer(receiverMAC, &peerInfo) != ESP_OK) {
-      if (debugEnabled) {
+      if (DebugService::isEnabled()) {
         debugPrint("Peer verification failed - peer not found after add");
       }
       return;
     }
     
     // Send discovery request from main loop context (safe - not from ESP-NOW callback)
-    struct_message discovery = {MSG_DISCOVERY_REQ, 0, false, service->pedalMode};
+    struct_message discovery = {DEVICE_TYPE_TRANSMITTER, MSG_DISCOVERY_REQ, 0, false, service->pedalMode};
     bool sent = espNowTransport_send(service->transport, receiverMAC, (uint8_t*)&discovery, sizeof(discovery));
     
-    if (debugEnabled) {
+    if (DebugService::isEnabled()) {
       if (sent) {
         debugPrint("Discovery request sent successfully (from main loop)");
       } else {

@@ -6241,7 +6241,7 @@
 		)
 		(uuid "30db169e-15ac-455e-a760-2bde16adc8e2")
 	)
-	(label "GPIO7"
+	(label "GPIO1"
 		(at 213.36 227.33 0)
 		(effects
 			(font
@@ -6391,7 +6391,7 @@
 		)
 		(uuid "825e806c-b336-4152-adcc-4eef3c20c1f0")
 	)
-	(label "GPIO1"
+	(label "GPIO2"
 		(at 213.36 205.74 0)
 		(effects
 			(font
@@ -6501,7 +6501,7 @@
 		)
 		(uuid "a2fa5974-ddd5-4205-bccf-ef3c49b97da2")
 	)
-	(label "GPIO6"
+	(label "GPIO7"
 		(at 175.26 227.33 0)
 		(effects
 			(font
@@ -6511,7 +6511,7 @@
 		)
 		(uuid "afc17227-06f2-49bf-a85a-2c43436f86be")
 	)
-	(label "GPIO2"
+	(label "GPIO6"
 		(at 175.26 205.74 0)
 		(effects
 			(font
