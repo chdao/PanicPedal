@@ -177,16 +177,21 @@ The system consists of:
 - Only accepts discovery from known transmitters
 - Processes pedal events
 - Handles `MSG_PAIRING_CONFIRMED` from transmitters (reconnection request after deep sleep):
-  - If currently paired: Always responds with `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
-  - If not currently paired but slots available: Responds with `MSG_PAIRING_CONFIRMED`
-  - If not currently paired and slots full: Does not respond
+  - **Always checks slot availability**
+  - **For currently paired transmitters**: Excludes that transmitter's slots from the count (allows reclaiming own slots)
+  - **For non-paired transmitters**: Checks if accepting would exceed `MAX_PEDAL_SLOTS`
+  - If slots available (after excluding currently paired transmitter's slots if applicable): Responds with `MSG_PAIRING_CONFIRMED_ACK`
+  - If slots would exceed `MAX_PEDAL_SLOTS`: Does not respond (transmitter will delete receiver from NVS on timeout)
+  - This prevents over-allocation if receiver restarted and accepted new transmitters during grace period, while allowing currently paired transmitters to reconnect
 - Handles `MSG_PAIRING_CONFIRMED_ACK` from transmitters (acknowledgment that they received our pairing confirmation):
   - Marks transmitter as `seenOnBoot = true` when `MSG_PAIRING_CONFIRMED_ACK` is received
   - Updates `lastSeen` time
 - Sends `MSG_PAIRING_CONFIRMED` to known transmitters that send `MSG_ONLINE`:
-  - If currently paired (`seenOnBoot = true`): Always sends `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
-  - If not currently paired but slots available: Sends `MSG_PAIRING_CONFIRMED`
-  - If not currently paired and slots full: Does not respond
+  - **Always checks slot availability**
+  - **For currently paired transmitters**: Excludes that transmitter's slots from the count (allows reclaiming own slots)
+  - **For non-paired transmitters**: Checks if accepting would exceed `MAX_PEDAL_SLOTS`
+  - If slots available (after excluding currently paired transmitter's slots if applicable): Sends `MSG_PAIRING_CONFIRMED`
+  - If slots would exceed `MAX_PEDAL_SLOTS`: Does not respond (transmitter will delete receiver from NVS on timeout)
 - Handles `MSG_ONLINE` from unknown transmitters:
   - If slots available: Sends `MSG_ALIVE` to request discovery
   - If slots full: Does not respond
@@ -195,12 +200,11 @@ The system consists of:
 - Can replace unresponsive transmitters if slots full
 
 **Transitions:**
-- `MSG_ONLINE` from known transmitter (currently paired) → Always send `MSG_PAIRING_CONFIRMED` (reconfirm pairing)
-- `MSG_ONLINE` from known transmitter (not currently paired) → Check slots → Send `MSG_PAIRING_CONFIRMED` if available
+- `MSG_ONLINE` from known transmitter → **Always check slots** → Send `MSG_PAIRING_CONFIRMED` if slots available, otherwise refuse (transmitter will delete receiver from NVS)
 - `MSG_ONLINE` from unknown transmitter → Check slots → Send `MSG_ALIVE` to request discovery if available
 - `MSG_ONLINE` from receiver → Ignore (receivers don't talk to each other)
 - `MSG_ONLINE` from debug monitor → Store debug monitor MAC for debug message routing
-- `MSG_PAIRING_CONFIRMED` from known transmitter → Check slots → Send `MSG_PAIRING_CONFIRMED` back if available
+- `MSG_PAIRING_CONFIRMED` from known transmitter → **Always check slots** → Send `MSG_PAIRING_CONFIRMED_ACK` if slots available, otherwise refuse (transmitter will delete receiver from NVS)
 - `MSG_PAIRING_CONFIRMED_ACK` from known transmitter → Mark as `seenOnBoot = true` (acknowledgment received)
 - `MSG_PEDAL_EVENT` from known transmitter → Mark as `seenOnBoot = true`
 - `MSG_DELETE_RECORD` received → Remove transmitter from list
@@ -357,9 +361,15 @@ The receiver checks slot availability in these scenarios:
 - On timeout, can retry or return to DISCOVERED state
 
 ### Slot Full
-- Receiver rejects discovery requests if slots full
-- Exception: Known transmitters reclaiming their slots (always allowed)
-- Receiver does not respond to `MSG_PAIRING_CONFIRMED` or `MSG_ONLINE` from known transmitters if slots full and transmitter is not currently paired
+- Receiver rejects discovery requests if accepting would cause slots to exceed `MAX_PEDAL_SLOTS` (2)
+- **Exception for currently paired transmitters**: When a currently paired transmitter (`seenOnBoot = true`) requests reconnection, the receiver excludes that transmitter's slots from the count when checking availability. This allows currently paired transmitters to always reclaim their own slots.
+- Example for currently paired transmitter: If receiver has 2 slots used (this transmitter: 1 slot + other transmitter: 1 slot), and this transmitter requests reconnection:
+  - Slots without this transmitter = 2 - 1 = 1
+  - Check: 1 + 1 = 2 <= MAX_PEDAL_SLOTS (2) ✓ **Allowed** (reclaiming own slot)
+- Example for non-paired transmitter: If receiver has 2 slots used and a non-paired known transmitter needs 1 slot, receiver refuses (2 + 1 = 3 > 2)
+- Receiver does not respond to `MSG_PAIRING_CONFIRMED` or `MSG_ONLINE` from known transmitters if accepting the pairing would cause slots to exceed `MAX_PEDAL_SLOTS` (except for currently paired transmitters reclaiming their own slots)
+- Transmitter detects refusal (no ACK within timeout) and deletes receiver from NVS, then broadcasts `MSG_ONLINE` for discovery
+- This prevents over-allocation when receiver restarts and accepts new transmitters during grace period, while allowing currently paired transmitters to reconnect
 
 ### Different Receiver Pairing Attempt
 - If transmitter receives `MSG_PAIRING_CONFIRMED` from a different receiver while already paired:
@@ -384,11 +394,11 @@ The receiver checks slot availability in these scenarios:
 - Records send time and sets waiting flag for `MSG_PAIRING_CONFIRMED_ACK`
 - If pedal pressed on wake, sends pedal event immediately (after pairing is restored)
 - Receiver responds with `MSG_PAIRING_CONFIRMED_ACK` if:
-  - Transmitter is currently paired (always responds to reconfirm)
-  - Transmitter is not currently paired but slots are available
+  - Slots are available (always checks slots, even for currently paired transmitters)
+- Receiver does NOT respond if slots are full (transmitter will delete receiver from NVS on timeout)
 - Transmitter restores pairing state when receiving `MSG_PAIRING_CONFIRMED_ACK` (clears waiting flag, no further message sent)
-- **If no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second**: Broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER, fallback to discovery mode)
-- If receiver doesn't respond (slots full and not currently paired), transmitter broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER) after timeout
+- **If no `MSG_PAIRING_CONFIRMED_ACK` received within 1 second**: Receiver refused pairing (slots full) → **Delete receiver MAC from NVS** → Clear pairing state → Broadcast `MSG_ONLINE` (deviceType=TRANSMITTER, fallback to discovery mode)
+- This happens when receiver restarted and accepted new transmitters during grace period, or when pedal was asleep and slots filled up
 - If transmitter receives `MSG_PAIRING_CONFIRMED` from different receiver, sends `MSG_DELETE_RECORD` to that receiver
 - If no MAC saved: Broadcasts `MSG_ONLINE` (deviceType=TRANSMITTER) immediately (for discovery)
 

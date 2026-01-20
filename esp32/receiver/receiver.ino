@@ -5,6 +5,7 @@
 // Clean Architecture: Include shared and domain modules
 #include "shared/messages.h"
 #include "shared/config.h"
+#include "../shared/domain/MacUtils.h"
 #include "domain/TransmitterManager.h"
 #include "domain/SlotManager.h"
 #include "domain/SlotManager.cpp"  // Force compilation of SlotManager
@@ -79,10 +80,8 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
     debug_monitor_req_message* req = (debug_monitor_req_message*)data;
     // Only process if it's from a debug monitor (not from another receiver/transmitter)
     if (req->deviceType == DEVICE_TYPE_DEBUG_MONITOR) {
+      // handleDebugMonitorDiscovery will only print if this is a new discovery
       DebugService::handleDebugMonitorDiscovery(senderMAC);
-      
-      // Send immediate confirmation that pairing succeeded
-      DebugService::print("Debug monitor discovery request received and processed");
     }
     return;
   }
@@ -116,24 +115,25 @@ void onMessageReceived(const uint8_t* senderMAC, const uint8_t* data, int len, u
       int transmitterIndex = transmitterManager_findIndex(&transmitterManager, senderMAC);
       if (transmitterIndex >= 0) {
         // Known transmitter requesting reconnection - check if we can accept it
+        // ALWAYS check slot availability, even for currently paired transmitters
+        // This prevents over-allocation if slots have been reassigned (e.g., receiver restarted and accepted new transmitters)
         int slotsNeeded = getSlotsNeeded(transmitterManager.transmitters[transmitterIndex].pedalMode);
         bool isCurrentlyPaired = transmitterManager.transmitters[transmitterIndex].seenOnBoot;
         
+        SlotAvailabilityResult result = slotManager_checkReconnection(&transmitterManager, transmitterIndex, slotsNeeded);
         bool shouldRespond = false;
-        if (isCurrentlyPaired) {
-          // Currently paired - always accept (reclaiming own slots)
+        
+        if (result.canFit) {
           shouldRespond = true;
-          DebugService::print( "Known transmitter %d (currently paired) requesting reconnection - sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
-        } else {
-          // Not currently paired - check if slots available
-          SlotAvailabilityResult result = slotManager_checkReconnection(&transmitterManager, transmitterIndex, slotsNeeded);
-          if (result.canFit) {
-            shouldRespond = true;
-            DebugService::print( "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
+          if (isCurrentlyPaired) {
+            DebugService::print( "Known transmitter %d (currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
           } else {
-            DebugService::print( "Known transmitter %d requesting reconnection - slots full (%d + %d > %d), not responding", 
-                             transmitterIndex, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
+            DebugService::print( "Known transmitter %d (not currently paired) requesting reconnection - slots available, sending MSG_PAIRING_CONFIRMED_ACK", transmitterIndex);
           }
+        } else {
+          // Not enough slots - refuse pairing (transmitter will delete receiver from NVS on timeout)
+          DebugService::print( "Known transmitter %d requesting reconnection - slots full (%d + %d > %d), refusing (transmitter will delete pairing)", 
+                           transmitterIndex, result.currentSlotsUsed, slotsNeeded, MAX_PEDAL_SLOTS);
         }
         
         if (shouldRespond) {
@@ -409,11 +409,17 @@ void setup() {
   
   // DebugService will automatically send buffered messages when debug monitor is discovered
   // Send debug messages now that ESP-NOW is fully initialized
+  // Note: print() will automatically call sendBufferedMessages() if transport is ready and monitor is known
   DebugService::print("ESP-NOW initialized");
   DebugService::print("Loaded %d transmitter(s) from EEPROM", transmitterManager.count);
   // Show slots used based on responsive transmitters only (not stored slotsUsed)
   int responsiveSlots = transmitterManager_calculateSlotsUsed(&transmitterManager);
   DebugService::print("Pedal slots used: %d/%d (responsive transmitters only)", responsiveSlots, MAX_PEDAL_SLOTS);
+  
+  // Force sending buffered messages now that ESP-NOW is fully set up
+  // This ensures messages are sent even if debug monitor was discovered before ESP-NOW was ready
+  // We'll call print() with an empty message to trigger sendBufferedMessages() check
+  DebugService::print("ESP-NOW setup complete");
   
   // Broadcast MSG_ONLINE to announce receiver is online (debug monitor will respond)
   online_message onlineMsg;
@@ -583,6 +589,19 @@ void loop() {
 #include "infrastructure/EspNowTransport.cpp"
 #include "infrastructure/Persistence.cpp"
 #include "infrastructure/LEDService.cpp"
+#include "../shared/infrastructure/DebugService.cpp"
 #include "shared/debug_format.cpp"
 #include "application/PairingService.cpp"
 #include "application/KeyboardService.cpp"
+
+// Stub implementations for EspNowTransport functions (needed by DebugService but never called when using function pointers)
+// These are only needed for linker satisfaction - the receiver always uses function pointers
+#include "../shared/infrastructure/EspNowTransport.h"
+bool espNowTransport_addPeer(EspNowTransport* transport, const uint8_t* mac, uint8_t channel) {
+  (void)transport; (void)mac; (void)channel;
+  return false;  // Never called when receiver uses function pointers
+}
+bool espNowTransport_send(EspNowTransport* transport, const uint8_t* mac, const uint8_t* data, int len) {
+  (void)transport; (void)mac; (void)data; (void)len;
+  return false;  // Never called when receiver uses function pointers
+}

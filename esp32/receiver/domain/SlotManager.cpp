@@ -43,16 +43,28 @@ SlotAvailabilityResult slotManager_checkReconnection(const TransmitterManager* m
   }
   
   bool wasAlreadyResponsive = manager->transmitters[transmitterIndex].seenOnBoot;
-  result.currentSlotsUsed = transmitterManager_calculateSlotsUsed(manager);
   
   if (wasAlreadyResponsive) {
-    // Already responsive - verify slots are still available
-    // Calculate what slots would be used if we accept this reconnection
-    // (should be the same as current, but verify to prevent over-allocation)
+    // Already responsive - this transmitter is reclaiming its own slots
+    // Exclude this transmitter's slots from the count when checking availability
+    result.currentSlotsUsed = transmitterManager_calculateSlotsUsed(manager);
+    
+    // Subtract this transmitter's slots from the count (it's reclaiming its own slots)
+    int thisTransmitterSlots = getSlotsNeeded(manager->transmitters[transmitterIndex].pedalMode);
+    int slotsWithoutThisTransmitter = result.currentSlotsUsed - thisTransmitterSlots;
+    
+    // After reconnection, slots used will be the same as current (this transmitter already counted)
     result.slotsAfterChange = result.currentSlotsUsed;
-    result.canFit = (result.slotsAfterChange <= MAX_PEDAL_SLOTS);
+    
+    // Check if OTHER transmitters' slots + this transmitter's slots fit
+    // This allows currently paired transmitters to always reclaim their own slots
+    // Example: If receiver has 2 slots used (this transmitter + 1 other), and this transmitter needs 1 slot:
+    //   slotsWithoutThisTransmitter = 2 - 1 = 1
+    //   slotsWithoutThisTransmitter + slotsNeeded = 1 + 1 = 2 <= MAX_PEDAL_SLOTS (2) ✓
+    result.canFit = (slotsWithoutThisTransmitter + slotsNeeded <= MAX_PEDAL_SLOTS);
   } else {
     // Becoming responsive - add its slots and verify they fit
+    result.currentSlotsUsed = transmitterManager_calculateSlotsUsed(manager);
     result.slotsAfterChange = result.currentSlotsUsed + slotsNeeded;
     result.canFit = (result.slotsAfterChange <= MAX_PEDAL_SLOTS);
   }

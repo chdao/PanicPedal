@@ -233,25 +233,21 @@ void receiverPairingService_handleTransmitterOnline(ReceiverPairingService* serv
     }
     
     // Slots available - send pairing confirmation
+    // Note: We always check slots, even for currently paired transmitters
+    // This prevents over-allocation if slots have been reassigned (e.g., receiver restarted)
     bool shouldRespond = true;
     if (service->debugCallback) {
       char macStr[18];
       snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                txMAC[0], txMAC[1], txMAC[2], txMAC[3], txMAC[4], txMAC[5]);
       if (isCurrentlyPaired) {
-        service->debugCallback("Transmitter %s is already paired - sending MSG_PAIRING_CONFIRMED to reconfirm", macStr);
+        service->debugCallback("Transmitter %s is already paired and slots available - sending MSG_PAIRING_CONFIRMED to reconfirm", macStr);
       } else {
         service->debugCallback("Transmitter %s not currently paired but slots available - sending MSG_PAIRING_CONFIRMED", macStr);
       }
     }
     
-    // shouldRespond should always be true here if we reach this point
-    // (either currently paired, or slots available)
-    if (!shouldRespond) {
-      return;  // Safety check (should never happen)
-    }
-    
-    // Send pairing confirmation (either currently paired or slots available)
+    // Send pairing confirmation (slots verified available above)
     receiverEspNowTransport_addPeer(service->transport, txMAC, channel);
     
     // Send pairing confirmation message ("You're paired with me")

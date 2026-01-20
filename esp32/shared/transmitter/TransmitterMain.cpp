@@ -252,9 +252,20 @@ void transmitterMain_loop() {
       pairingService.waitingForPairingConfirmedAck = false;
       pairingService.pairingConfirmedSentTime = 0;
       
+      // Receiver refused pairing (slots full) - delete receiver from NVS
+      // This happens when receiver restarted and accepted new transmitters, or pedal was asleep during grace period
+      Preferences preferences;
+      preferences.begin("pedal", false);
+      preferences.remove("pairedMAC");
+      preferences.end();
+      
+      // Clear pairing state
+      pairingState_init(&pairingState);
+      
       #ifdef DEBUG_ENABLED
       if (DEBUG_ENABLED) {
-        DebugService::print("MSG_PAIRING_CONFIRMED timeout - no ACK received, sending MSG_ONLINE");
+        DebugService::print("MSG_PAIRING_CONFIRMED timeout - receiver refused pairing (slots full), deleted receiver from NVS");
+        DebugService::print("Broadcasting MSG_ONLINE to discover available receivers");
       }
       #endif
       pairingService_broadcastOnline(&pairingService);

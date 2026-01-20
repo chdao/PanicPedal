@@ -79,6 +79,9 @@ void DebugService::print(const char* format, ...) {
   if (!debugEnabled) {
     return;
   }
+  
+  // Always buffer messages (even if transport not ready or monitor not known)
+  // This ensures all messages are captured and sent when monitor connects
 
   // Use cached MAC address
   cacheMAC();
@@ -87,7 +90,9 @@ void DebugService::print(const char* format, ...) {
   char buffer[250];
   va_list args;
   va_start(args, format);
-  debugFormat_message_va(buffer, sizeof(buffer), g_cachedMAC, false, bootTime, format, args);
+  // Determine if this is a receiver based on device type
+  bool isReceiver = (g_deviceType == DEVICE_TYPE_RECEIVER);
+  debugFormat_message_va(buffer, sizeof(buffer), g_cachedMAC, isReceiver, bootTime, format, args);
   va_end(args);
   
   // Send to Serial (if DEBUG_ENABLED) - non-blocking write in chunks
@@ -120,50 +125,13 @@ void DebugService::print(const char* format, ...) {
     transportReady = (g_debugTransport && g_debugTransport->initialized);
   }
   
-  if (transportReady) {
-    debug_message debugMsg;
-    debugMsg.deviceType = g_deviceType;  // Use configured device type
-    debugMsg.msgType = MSG_DEBUG;
-    
-    int len = strlen(buffer);
-    if (len > 0 && buffer[len-1] == '\n') {
-      buffer[len-1] = '\0';
-      len--;
-    }
-    
-    size_t maxMsgLen = sizeof(debugMsg.message) - 1;
-    if (len > (int)maxMsgLen) {
-      len = maxMsgLen;
-    }
-    
-    memcpy(debugMsg.message, buffer, len);
-    debugMsg.message[len] = '\0';
-    
-    // Small delay to ensure ESP-NOW stack is ready (especially after sending other messages)
-    yield();
-    delay(10);
-    
-    // Only send to debug monitor if known - don't broadcast (reduces network spam)
-    if (g_debugMonitorKnown) {
-      // Send directly to known debug monitor
-      if (g_useFunctionPointers) {
-        g_addPeerFunction(g_debugMonitorMAC, 0);
-        delay(5);
-        g_sendFunction(g_debugMonitorMAC, (uint8_t*)&debugMsg, sizeof(debugMsg));
-      } else {
-        espNowTransport_addPeer(g_debugTransport, g_debugMonitorMAC, 0);
-        delay(5);
-        espNowTransport_send(g_debugTransport, g_debugMonitorMAC, (uint8_t*)&debugMsg, sizeof(debugMsg));
-      }
-      
-      // Small delay after send to ensure it completes
-      yield();
-      delay(5);
-    } else {
-      // If no debug monitor is known, buffer the message for later
-      // This allows debug monitor to receive messages from boot when it connects
-      bufferMessage(buffer);
-    }
+  // Always buffer the message first (ensures no messages are lost)
+  bufferMessage(buffer);
+  
+  // If debug monitor is known and transport is ready, try to send buffered messages
+  if (transportReady && g_debugMonitorKnown) {
+    // Send all buffered messages (including the one we just added)
+    sendBufferedMessages();
   }
 }
 
@@ -208,21 +176,24 @@ EspNowTransport* DebugService::getDebugTransport() {
 void DebugService::handleDebugMonitorDiscovery(const uint8_t* monitorMAC) {
   if (!monitorMAC) return;
   
+  // Check if this is a new discovery (not already known)
+  bool wasAlreadyKnown = g_debugMonitorKnown;
+  
   // Store the debug monitor's MAC address
   memcpy(g_debugMonitorMAC, monitorMAC, 6);
   g_debugMonitorKnown = true;
   
-  #ifdef DEBUG_ENABLED
-  if (DEBUG_ENABLED && debugEnabled) {
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             monitorMAC[0], monitorMAC[1], monitorMAC[2],
-             monitorMAC[3], monitorMAC[4], monitorMAC[5]);
-    serialPrint("Debug monitor discovered: %s - will send debug messages directly", macStr);
+  // Only print discovery message if this is a new discovery
+  if (!wasAlreadyKnown) {
+    // Send a test message immediately to verify discovery works
+    // This will be buffered if transport isn't ready, but will be sent when transport becomes ready
+    print("Debug monitor discovered: %02X:%02X:%02X:%02X:%02X:%02X",
+          monitorMAC[0], monitorMAC[1], monitorMAC[2],
+          monitorMAC[3], monitorMAC[4], monitorMAC[5]);
   }
-  #endif
   
-  // Send all buffered messages from boot
+  // Send all buffered messages from boot (if transport is ready)
+  // If transport isn't ready yet, messages will be sent when print() is called later
   sendBufferedMessages();
 }
 
@@ -262,12 +233,6 @@ void DebugService::sendBufferedMessages() {
   if (g_bufferCount == 0) {
     return;  // No buffered messages
   }
-  
-  #ifdef DEBUG_ENABLED
-  if (DEBUG_ENABLED && debugEnabled) {
-    serialPrint("Sending %d buffered debug message(s) to debug monitor", g_bufferCount);
-  }
-  #endif
   
   // Add peer once
   if (g_useFunctionPointers) {
